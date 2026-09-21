@@ -39,12 +39,13 @@
   /* ============ Firebase (Auth + Realtime Database) ============ */
   var firebaseConfig = {
     apiKey: "__FIREBASE_API_KEY__",
-    authDomain: "baratto-311e9.firebaseapp.com",
-    databaseURL: "https://baratto-311e9-default-rtdb.europe-west1.firebasedatabase.app",
-    projectId: "baratto-311e9",
-    storageBucket: "baratto-311e9.firebasestorage.app",
-    messagingSenderId: "38778508770",
-    appId: "1:38778508770:web:ddb8608a51c569915f15bb"
+  authDomain: "baratto-311e9.firebaseapp.com",
+  databaseURL: "https://baratto-311e9-default-rtdb.europe-west1.firebasedatabase.app",
+  projectId: "baratto-311e9",
+  storageBucket: "baratto-311e9.firebasestorage.app",
+  messagingSenderId: "38778508770",
+  appId: "1:38778508770:web:0cb04b1e3de45b115f15bb",
+  measurementId: "G-R707Y9EQ7B"
   };
   firebase.initializeApp(firebaseConfig);
   var fbAuth = firebase.auth();
