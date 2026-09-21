@@ -24,7 +24,8 @@
     loader: '<path d="M12 3v3M12 18v3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M3 12h3M18 12h3M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/>',
     "chevron-left": '<path d="M14.5 6L8.5 12l6 6"/>',
     refresh: '<path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v5h-5"/>',
-    gift: '<rect x="4" y="9.5" width="16" height="10.5" rx="1"/><path d="M4 13.5h16"/><path d="M12 9.5V20"/><path d="M12 9.5c-1.5 0-3-1-3-2.75S10.3 4 12 5.5c1.7-1.5 3-.75 3 1.25S13.5 9.5 12 9.5z"/>'
+    gift: '<rect x="4" y="9.5" width="16" height="10.5" rx="1"/><path d="M4 13.5h16"/><path d="M12 9.5V20"/><path d="M12 9.5c-1.5 0-3-1-3-2.75S10.3 4 12 5.5c1.7-1.5 3-.75 3 1.25S13.5 9.5 12 9.5z"/>',
+    search: '<circle cx="11" cy="11" r="7.5"/><path d="M21 21l-4.7-4.7"/>'
   };
   function icon(name, extra) {
     return '<svg class="icon ' + (extra || "") + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">' + (ICON_PATHS[name] || "") + "</svg>";
@@ -37,7 +38,7 @@
 
   /* ============ Firebase (Auth + Realtime Database) ============ */
   var firebaseConfig = {
-    apiKey: "AIzaSyDLiTnXkxJAJgUXuYyZrw6Rp6RvMhIU8MM",
+    apiKey: "__FIREBASE_API_KEY__",
     authDomain: "baratto-311e9.firebaseapp.com",
     databaseURL: "https://baratto-311e9-default-rtdb.europe-west1.firebasedatabase.app",
     projectId: "baratto-311e9",
@@ -161,7 +162,7 @@
     booting: true, authEmail: "", linkSentTo: null, freshLogin: false, needUsername: false, usernameInput: "", usernameError: "", currentUser: null, authMode: "login", authError: "", authBusy: false,
     tab: "inventory", message: null,
     myInventory: [], invLoading: false,
-    communityLoading: false, communityUsers: [], selectedUser: null, otherInventory: [], otherInventoryTotal: 0, otherLoading: false,
+    communityLoading: false, communityUsers: [], communitySearch: "", selectedUser: null, otherInventory: [], otherInventoryTotal: 0, otherLoading: false,
     showAddItem: false, newItemName: "", newItemPhotos: [], addBusy: false,
     showTradeBuilder: false, wantIds: [], offerIds: [], tradeBusy: false,
     incomingTrades: [], outgoingTrades: [], historyTrades: [], tradesLoading: false, respondingId: null,
@@ -301,7 +302,7 @@
     stopTradesPolling(); stopFriendsPolling();
     fbAuth.signOut();
     state.currentUser = null; state.myInventory = []; state.selectedUser = null; state.otherInventory = [];
-    state.incomingTrades = []; state.outgoingTrades = []; state.historyTrades = []; state.communityUsers = [];
+    state.incomingTrades = []; state.outgoingTrades = []; state.historyTrades = []; state.communityUsers = []; state.communitySearch = "";
     state.incomingFriendReqs = []; state.outgoingFriendReqs = []; state.friends = []; state.friendsSig = "";
     state.friendInput = ""; state.friendAddBusy = false; state.friendBusyId = null; state.friendsLoading = false;
     state.tab = "inventory"; state.authMode = "login"; state.lightbox = null;
@@ -874,22 +875,40 @@
       '<button data-action="open-add-item" class="btn-primary">' + icon("plus") + " Aggiungi oggetto</button></div>" + body;
   }
 
+  /* filtra la lista community in base al testo di ricerca (case-insensitive, sottostringa dello username) */
+  function filteredCommunityUsers() {
+    var q = (state.communitySearch || "").trim().toLowerCase();
+    if (!q) return state.communityUsers;
+    return state.communityUsers.filter(function (u) { return u.username.toLowerCase().indexOf(q) !== -1; });
+  }
+
   function renderCommunityTab() {
-    var body;
+    var body, list = filteredCommunityUsers();
     if (state.communityLoading) {
       body = '<div class="spinner-wrap">' + icon("loader", "spin") + "</div>";
     } else if (state.communityUsers.length === 0) {
       body = '<div class="empty-state">' + icon("users") + "<p>Nessun altro utente registrato, per ora.</p></div>";
+    } else if (list.length === 0) {
+      body = '<div class="empty-state">' + icon("search") + "<p>Nessun utente trovato per \u201c" + escapeHtml(state.communitySearch) + "\u201d.</p></div>";
     } else {
-      body = '<div class="user-list">' + state.communityUsers.map(function (u) {
-        return '<button class="user-row" data-action="open-user" data-username="' + escapeHtml(u.username) + '">' +
-          '<div class="left"><div class="avatar md">' + escapeHtml(u.username.charAt(0).toUpperCase()) + '</div>' +
-          '<div><p class="name">' + escapeHtml(u.username) + (friendStatusWith(u.username).kind === "friend" ? '<span class="badge accepted">Amico</span>' : "") + '</p><p class="count">' + u.count + " oggett" + (u.count === 1 ? "o" : "i") + "</p></div></div>" +
-          icon("chevron-left", "chevron") + "</button>";
+      body = '<div class="user-list">' + list.map(function (u) {
+        return '<div class="user-row">' +
+          '<button class="user-row-main" data-action="open-user" data-username="' + escapeHtml(u.username) + '">' +
+            '<div class="left"><div class="avatar md">' + escapeHtml(u.username.charAt(0).toUpperCase()) + '</div>' +
+            '<div><p class="name">' + escapeHtml(u.username) + (friendStatusWith(u.username).kind === "friend" ? '<span class="badge accepted">Amico</span>' : "") + '</p><p class="count">' + u.count + " oggett" + (u.count === 1 ? "o" : "i") + "</p></div></div>" +
+            icon("chevron-left", "chevron") +
+          "</button>" +
+          '<div class="user-row-actions">' + friendActionButton(u.username) + "</div>" +
+        "</div>";
       }).join("") + "</div>";
     }
+    var searchBox = state.communityUsers.length > 0 ?
+      '<div class="community-search">' + icon("search") +
+        '<input type="text" id="community-search" placeholder="Cerca per username" autocomplete="off" autocapitalize="none" spellcheck="false" value="' + escapeHtml(state.communitySearch || "") + '" />' +
+      "</div>" : "";
     return '<div class="section-head"><div><h2 class="display">Community</h2><p class="section-sub">Sfoglia gli inventari degli altri utenti</p></div>' +
-      '<button data-action="refresh-community" class="btn-ghost">' + icon("refresh", state.communityLoading ? "spin-sm" : "") + " Aggiorna</button></div>" + body;
+      '<button data-action="refresh-community" class="btn-ghost">' + icon("refresh", state.communityLoading ? "spin-sm" : "") + " Aggiorna</button></div>" +
+      searchBox + body;
   }
 
   /* pulsante/stato amicizia mostrato nel profilo di un altro utente */
@@ -1113,13 +1132,14 @@
       document.getElementById("app").innerHTML = '<div class="auth-wrap"><div class="auth-box" style="text-align:center;">' + icon("loader", "spin-sm") + "</div></div>";
       return;
     }
-    /* il campo "aggiungi amico" non deve perdere focus e cursore se la pagina si ridisegna mentre si scrive */
+    /* alcuni campi (aggiungi amico, ricerca community) non devono perdere focus e cursore se la pagina si ridisegna mentre si scrive */
+    var FOCUS_PRESERVE_IDS = ["friend-username", "community-search"];
     var active = document.activeElement;
-    var keepFocus = !!(active && active.id === "friend-username");
-    var selStart = keepFocus ? active.selectionStart : null, selEnd = keepFocus ? active.selectionEnd : null;
+    var keepFocusId = (active && FOCUS_PRESERVE_IDS.indexOf(active.id) !== -1) ? active.id : null;
+    var selStart = keepFocusId ? active.selectionStart : null, selEnd = keepFocusId ? active.selectionEnd : null;
     document.getElementById("app").innerHTML = state.currentUser ? renderApp() : renderAuth();
-    if (keepFocus) {
-      var el = document.getElementById("friend-username");
+    if (keepFocusId) {
+      var el = document.getElementById(keepFocusId);
       if (el) { el.focus(); try { el.setSelectionRange(selStart, selEnd); } catch (err) {} }
     }
   }
@@ -1187,6 +1207,7 @@
     else if (e.target && e.target.id === "auth-email") state.authEmail = e.target.value;
     else if (e.target && e.target.id === "new-username") state.usernameInput = e.target.value;
     else if (e.target && e.target.id === "friend-username") state.friendInput = e.target.value;
+    else if (e.target && e.target.id === "community-search") { state.communitySearch = e.target.value; render(); }
   });
 
   document.addEventListener("keydown", function (e) {
