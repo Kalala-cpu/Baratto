@@ -902,10 +902,10 @@
         "</div>";
       }).join("") + "</div>";
     }
-    var searchBox = state.communityUsers.length > 0 ?
+    var searchBox =
       '<div class="community-search">' + icon("search") +
-        '<input type="text" id="community-search" placeholder="Cerca per username" autocomplete="off" autocapitalize="none" spellcheck="false" value="' + escapeHtml(state.communitySearch || "") + '" />' +
-      "</div>" : "";
+        '<input type="search" id="community-search" placeholder="Cerca un utente della community" autocomplete="off" autocapitalize="none" spellcheck="false" value="' + escapeHtml(state.communitySearch || "") + '" />' +
+      "</div>";
     return '<div class="section-head"><div><h2 class="display">Community</h2><p class="section-sub">Sfoglia gli inventari degli altri utenti</p></div>' +
       '<button data-action="refresh-community" class="btn-ghost">' + icon("refresh", state.communityLoading ? "spin-sm" : "") + " Aggiorna</button></div>" +
       searchBox + body;
