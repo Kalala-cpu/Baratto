@@ -97,6 +97,7 @@
   var USERNAME_RE = /^[a-zA-Z0-9_]{3,20}$/;
   function sameUser(a, b) { return String(a || "").toLowerCase() === String(b || "").toLowerCase(); }
   var MAX_ITEM_PHOTOS = 6;
+  var HISTORY_PAGE = 12; /* scambi mostrati per volta nello storico */
   function genId() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
 
   /* foto: supporta sia i vecchi oggetti con "photo" (singola) sia i nuovi con "photos" (array) */
@@ -145,7 +146,21 @@
     var h = Math.floor(m / 60);
     if (h < 24) return h + " ore fa";
     var d = Math.floor(h / 24);
-    return d + " g fa";
+    return d < 7 ? d + " g fa" : formatDate(ts);
+  }
+
+  /* data breve in italiano; l'anno compare solo se diverso da quello corrente */
+  function formatDate(ts) {
+    var d = new Date(ts), opts = { day: "numeric", month: "short" };
+    if (d.getFullYear() !== new Date().getFullYear()) opts.year = "numeric";
+    return d.toLocaleDateString("it-IT", opts);
+  }
+
+  /* per le ricerche: minuscolo, senza accenti e senza spazi ai bordi */
+  function normalizeText(s) {
+    var t = String(s == null ? "" : s).toLowerCase();
+    try { t = t.normalize("NFD").replace(/[\u0300-\u036f]/g, ""); } catch (e) {}
+    return t.trim();
   }
 
   function getPerspective(trade, me) {
@@ -166,12 +181,13 @@
     communityLoading: false, communityUsers: [], communitySearch: "", selectedUser: null, otherInventory: [], otherInventoryTotal: 0, otherLoading: false,
     showAddItem: false, newItemName: "", newItemPhotos: [], addBusy: false,
     showTradeBuilder: false, wantIds: [], offerIds: [], tradeBusy: false,
-    incomingTrades: [], outgoingTrades: [], historyTrades: [], tradesLoading: false, respondingId: null,
+    incomingTrades: [], outgoingTrades: [], historyTrades: [], tradesLoading: false, respondingId: null, tradesSig: "",
+    historyFilter: "all", historySearch: "", historyLimit: HISTORY_PAGE, inventorySearch: "",
     incomingFriendReqs: [], outgoingFriendReqs: [], friends: [], friendsSig: "", friendsLoading: false, friendInput: "", friendAddBusy: false, friendBusyId: null,
     lightbox: null
   };
   var msgTimer = null;
-  var tradesPollInterval = null;
+  var tradesListeners = null;
   var friendsPollInterval = null;
 
   function notify(type, text) {
@@ -300,10 +316,11 @@
   }
 
   function handleLogout() {
-    stopTradesPolling(); stopFriendsPolling();
+    stopTradesSync(); stopFriendsPolling();
     fbAuth.signOut();
     state.currentUser = null; state.myInventory = []; state.selectedUser = null; state.otherInventory = [];
     state.incomingTrades = []; state.outgoingTrades = []; state.historyTrades = []; state.communityUsers = []; state.communitySearch = "";
+    state.tradesSig = ""; state.historyFilter = "all"; state.historySearch = ""; state.historyLimit = HISTORY_PAGE; state.inventorySearch = "";
     state.incomingFriendReqs = []; state.outgoingFriendReqs = []; state.friends = []; state.friendsSig = "";
     state.friendInput = ""; state.friendAddBusy = false; state.friendBusyId = null; state.friendsLoading = false;
     state.tab = "inventory"; state.authMode = "login"; state.lightbox = null;
@@ -361,6 +378,7 @@
     updateInventory(state.currentUser.toLowerCase(), function (inv) { return inv.concat([item]); }).then(function (updated) {
       state.addBusy = false;
       state.myInventory = updated; state.newItemName = ""; state.newItemPhotos = []; state.showAddItem = false;
+      if (state.inventorySearch && normalizeText(item.name).indexOf(normalizeText(state.inventorySearch)) === -1) state.inventorySearch = "";
       notify("success", "Oggetto aggiunto all'inventario.");
     }).catch(function (err) {
       console.error("submitNewItem", err);
@@ -640,16 +658,27 @@
     return fbDb.ref("trades").orderByChild(field).equalTo(state.currentUser).once("value").then(function (s) { return toArray(s.val()); });
   }
 
+  /* costruisce le liste (ricevute / inviate / storico) dai risultati delle due query; true se qualcosa e' cambiato */
+  function applyTradeLists(fromList, toList) {
+    var seen = {}, mine = [];
+    fromList.concat(toList).forEach(function (t) { if (t && t.id && !seen[t.id]) { seen[t.id] = true; mine.push(t); } });
+    mine.sort(function (a, b) { return b.createdAt - a.createdAt; });
+    var sig = mine.map(function (t) { return t.id + ":" + t.status + ":" + (t.respondedAt || 0); }).join("|");
+    var changed = sig !== state.tradesSig;
+    state.tradesSig = sig;
+    state.incomingTrades = mine.filter(function (t) { return t.toUser === state.currentUser && t.status === "pending"; });
+    state.outgoingTrades = mine.filter(function (t) { return t.fromUser === state.currentUser && t.status === "pending"; });
+    /* lo storico e' ordinato per data di conclusione (risposta), non di creazione */
+    state.historyTrades = mine.filter(function (t) { return t.status !== "pending"; })
+      .sort(function (a, b) { return historyDate(b) - historyDate(a); });
+    return changed;
+  }
+
   function loadTrades(silent) {
     if (!state.currentUser) return Promise.resolve();
     if (!silent) { state.tradesLoading = true; render(); }
     return Promise.all([queryTrades("fromUser"), queryTrades("toUser")]).then(function (res) {
-      var seen = {}, mine = [];
-      res[0].concat(res[1]).forEach(function (t) { if (t && t.id && !seen[t.id]) { seen[t.id] = true; mine.push(t); } });
-      mine.sort(function (a, b) { return b.createdAt - a.createdAt; });
-      state.incomingTrades = mine.filter(function (t) { return t.toUser === state.currentUser && t.status === "pending"; });
-      state.outgoingTrades = mine.filter(function (t) { return t.fromUser === state.currentUser && t.status === "pending"; });
-      state.historyTrades = mine.filter(function (t) { return t.status !== "pending"; });
+      applyTradeLists(res[0], res[1]);
     }).catch(function (e) {
       console.error("loadTrades", e);
       if (!silent) notify("error", "Impossibile caricare gli scambi.");
@@ -724,11 +753,31 @@
     render();
     if (tabId === "inventory") { loadMyInventory(); render(); }
     if (tabId === "community" && !state.selectedUser) loadCommunity();
-    if (tabId === "trades") { loadTrades(); startTradesPolling(); } else { stopTradesPolling(); }
+    if (tabId === "trades") { loadTrades(); startTradesSync(); } else { stopTradesSync(); }
     if (tabId === "friends") { loadFriends(); startFriendsPolling(); } else { stopFriendsPolling(); }
   }
-  function startTradesPolling() { stopTradesPolling(); tradesPollInterval = setInterval(function () { loadTrades(true); }, 15000); }
-  function stopTradesPolling() { if (tradesPollInterval) { clearInterval(tradesPollInterval); tradesPollInterval = null; } }
+  /* Listener realtime sulle due query (mittente / destinatario): dopo il primo caricamento Firebase invia solo le
+     differenze, invece di riscaricare l'intero storico (foto comprese) ogni 15 secondi. Si ridisegna solo se cambia qualcosa. */
+  function startTradesSync() {
+    stopTradesSync();
+    if (!state.currentUser) return;
+    var me = state.currentUser, got = [null, null];
+    tradesListeners = ["fromUser", "toUser"].map(function (field, idx) {
+      var q = fbDb.ref("trades").orderByChild(field).equalTo(me);
+      var cb = function (snap) {
+        got[idx] = toArray(snap.val());
+        if (!got[0] || !got[1] || state.currentUser !== me) return;
+        if (applyTradeLists(got[0], got[1])) { state.tradesLoading = false; render(); }
+      };
+      q.on("value", cb, function (err) { console.error("trades sync", err); });
+      return { query: q, cb: cb };
+    });
+  }
+  function stopTradesSync() {
+    if (!tradesListeners) return;
+    tradesListeners.forEach(function (l) { l.query.off("value", l.cb); });
+    tradesListeners = null;
+  }
 
   /* ============ rendering (stringhe HTML) ============ */
   function renderItemPhotoBlock(item, source, clickable) {
@@ -853,26 +902,72 @@
       "</div>";
   }
 
+  /* barra di ricerca riusabile; il pulsante "x" compare solo quando c'e' del testo (classe has-value) */
+  function renderSearchBox(id, placeholder, value) {
+    return '<div class="search-box' + (value ? " has-value" : "") + '">' + icon("search") +
+      '<input type="search" id="' + id + '" placeholder="' + escapeHtml(placeholder) + '" autocomplete="off" autocapitalize="none" spellcheck="false" value="' + escapeHtml(value || "") + '" />' +
+      '<button type="button" class="search-clear" data-action="clear-search" data-target="' + id + '" title="Cancella ricerca" aria-label="Cancella ricerca">' + icon("x") + "</button></div>";
+  }
+  function syncSearchBox(input) {
+    var box = input.closest ? input.closest(".search-box") : null;
+    if (box) box.classList.toggle("has-value", !!input.value);
+  }
+  function clearSearch(id) {
+    var input = document.getElementById(id);
+    if (input) { input.value = ""; syncSearchBox(input); input.focus(); }
+    if (id === "inventory-search") { state.inventorySearch = ""; updateInventoryResults(); }
+    else if (id === "history-search") { state.historySearch = ""; state.historyLimit = HISTORY_PAGE; updateHistory(); }
+  }
+
+  /* inventario: piu' recenti prima; la ricerca ignora maiuscole e accenti */
+  function filteredInventory() {
+    var q = normalizeText(state.inventorySearch);
+    var items = state.myInventory.slice().reverse();
+    if (!q) return items;
+    return items.filter(function (i) { return normalizeText(i.name).indexOf(q) !== -1; });
+  }
+  function inventoryCountLabel(shown) {
+    var total = state.myInventory.length, noun = " oggett" + (total === 1 ? "o" : "i");
+    return (normalizeText(state.inventorySearch) && total > 0) ? shown + " di " + total + noun : total + noun;
+  }
+  function renderInventoryGrid(items) {
+    if (items.length === 0) {
+      return '<div class="empty-state">' + icon("search") + "<p>Nessun oggetto trovato per \u201c" + escapeHtml(state.inventorySearch.trim()) + "\u201d.</p></div>";
+    }
+    return '<div class="item-grid">' + items.map(function (item) {
+      var available = isAvailable(item);
+      return '<div class="item-tile' + (available ? "" : " unavailable") + '">' +
+        renderItemPhotoBlock(item, "mine", true) +
+        '<div class="item-label"><p title="' + escapeHtml(item.name) + '">' + escapeHtml(item.name) + "</p></div>" +
+        '<div class="item-avail-row"><label class="switch"><input type="checkbox" class="avail-toggle" data-id="' + item.id + '" ' + (available ? "checked" : "") + ' /><span class="slider"></span></label>' +
+          '<span class="avail-text">' + (available ? "Disponibile" : "Non disponibile") + "</span></div>" +
+        '<button class="item-delete" data-action="delete-item" data-id="' + item.id + '" title="Rimuovi oggetto">' + icon("trash") + "</button>" +
+      "</div>";
+    }).join("") + "</div>";
+  }
+  /* aggiorna solo griglia e contatore mentre si digita: niente ridisegno dell'intera pagina, quindi il campo non perde il focus */
+  function updateInventoryResults() {
+    var box = document.getElementById("inventory-results");
+    if (!box) { render(); return; }
+    var items = filteredInventory();
+    box.innerHTML = renderInventoryGrid(items);
+    var c = document.getElementById("inventory-count");
+    if (c) c.textContent = inventoryCountLabel(items.length);
+  }
+
   function renderInventoryTab() {
-    var count = state.myInventory.length, body;
+    var count = state.myInventory.length, body, shown = 0;
     if (state.invLoading) {
       body = '<div class="spinner-wrap">' + icon("loader", "spin") + "</div>";
     } else if (count === 0) {
       body = '<div class="empty-state">' + icon("package") + "<p>Il tuo inventario è vuoto.</p><p class=\"sub\">Aggiungi il tuo primo oggetto per iniziare a scambiare.</p></div>";
     } else {
-      var items = state.myInventory.slice().reverse();
-      body = '<div class="item-grid">' + items.map(function (item) {
-        var available = isAvailable(item);
-        return '<div class="item-tile' + (available ? "" : " unavailable") + '">' +
-          renderItemPhotoBlock(item, "mine", true) +
-          '<div class="item-label"><p title="' + escapeHtml(item.name) + '">' + escapeHtml(item.name) + "</p></div>" +
-          '<div class="item-avail-row"><label class="switch"><input type="checkbox" class="avail-toggle" data-id="' + item.id + '" ' + (available ? "checked" : "") + ' /><span class="slider"></span></label>' +
-            '<span class="avail-text">' + (available ? "Disponibile" : "Non disponibile") + "</span></div>" +
-          '<button class="item-delete" data-action="delete-item" data-id="' + item.id + '" title="Rimuovi oggetto">' + icon("trash") + "</button>" +
-        "</div>";
-      }).join("") + "</div>";
+      var items = filteredInventory();
+      shown = items.length;
+      body = renderSearchBox("inventory-search", "Cerca nel tuo inventario", state.inventorySearch) +
+        '<div id="inventory-results">' + renderInventoryGrid(items) + "</div>";
     }
-    return '<div class="section-head"><div><h2 class="display">Il mio inventario</h2><p class="section-sub">' + count + " oggett" + (count === 1 ? "o" : "i") + '</p></div>' +
+    return '<div class="section-head"><div><h2 class="display">Il mio inventario</h2><p class="section-sub" id="inventory-count">' + inventoryCountLabel(shown) + '</p></div>' +
       '<button data-action="open-add-item" class="btn-primary">' + icon("plus") + " Aggiungi oggetto</button></div>" + body;
   }
 
@@ -1053,6 +1148,7 @@
   function tradeCard(trade) {
     var p = getPerspective(trade, state.currentUser);
     var busy = state.respondingId === trade.id;
+    var whenTs = trade.status === "pending" ? trade.createdAt : historyDate(trade);
     var actions = "";
     if (trade.status === "pending" && !p.isFrom) {
       actions = '<div class="trade-actions">' +
@@ -1063,10 +1159,89 @@
     }
     return '<div class="trade-card"><div class="head"><div class="who">' +
       '<div class="avatar sm">' + escapeHtml(p.counterpart.charAt(0).toUpperCase()) + '</div>' +
-      '<div><p class="name">' + escapeHtml(p.counterpart) + '</p><p class="time">' + icon("clock") + " " + timeAgo(trade.createdAt) + "</p></div></div>" +
+      '<div><p class="name">' + escapeHtml(p.counterpart) + '</p><p class="time" title="' + new Date(whenTs).toLocaleString("it-IT") + '">' + icon("clock") + " " + (trade.status === "pending" ? timeAgo(whenTs) : formatDate(whenTs)) + "</p></div></div>" +
       statusBadge(trade.status) + "</div>" +
       '<div class="trade-items">' + tradeItemsRow(p.receive, "Ricevi", "text-brass") + tradeItemsRow(p.give, "Dai", "text-verdigris") + "</div>" +
       actions + "</div>";
+  }
+
+  /* ---- storico scambi ----
+     Con molti scambi mostriamo una pagina alla volta (HISTORY_PAGE), raggruppata per mese, con ricerca (utente o nome oggetto)
+     e filtro per stato. Come per l'inventario, mentre si digita si aggiorna solo il blocco dei risultati. */
+  var HISTORY_FILTERS = [
+    { id: "all", label: "Tutti" }, { id: "accepted", label: "Accettati" }, { id: "declined", label: "Rifiutati" },
+    { id: "cancelled", label: "Annullati" }, { id: "failed", label: "Non riusciti" }
+  ];
+  function historyDate(t) { return t.respondedAt || t.createdAt || 0; }
+  function monthKey(ts) { var d = new Date(ts); return d.getFullYear() + "-" + d.getMonth(); }
+  function monthLabel(ts) { return new Date(ts).toLocaleDateString("it-IT", { month: "long", year: "numeric" }); }
+
+  /* testo su cui cerca lo storico: controparte + nomi degli oggetti (calcolato una volta per scambio) */
+  function tradeSearchText(t) {
+    if (t._s === undefined) {
+      var names = toArray(t.offerItems).concat(toArray(t.requestItems)).map(function (i) { return i && i.name; });
+      t._s = normalizeText([getPerspective(t, state.currentUser).counterpart].concat(names).join("\n"));
+    }
+    return t._s;
+  }
+
+  function historyFiltered() {
+    var q = normalizeText(state.historySearch), f = state.historyFilter;
+    var matched = q ? state.historyTrades.filter(function (t) { return tradeSearchText(t).indexOf(q) !== -1; }) : state.historyTrades;
+    var counts = { all: matched.length };
+    matched.forEach(function (t) { counts[t.status] = (counts[t.status] || 0) + 1; });
+    return { list: f === "all" ? matched : matched.filter(function (t) { return t.status === f; }), counts: counts };
+  }
+
+  function renderHistoryChips(counts) {
+    return '<div class="filter-chips" role="group" aria-label="Filtra per stato">' +
+      HISTORY_FILTERS.filter(function (f) { return f.id === "all" || counts[f.id] || state.historyFilter === f.id; }).map(function (f) {
+        var active = state.historyFilter === f.id;
+        return '<button type="button" class="filter-chip' + (active ? " active" : "") + '" data-action="history-filter" data-filter="' + f.id + '" aria-pressed="' + active + '">' +
+          f.label + '<span class="chip-count">' + (counts[f.id] || 0) + "</span></button>";
+      }).join("") + "</div>";
+  }
+
+  function renderHistoryBody() {
+    var r = historyFiltered(), list = r.list, html = renderHistoryChips(r.counts);
+    if (list.length === 0) {
+      return html + '<div class="empty-state">' + icon("search") + "<p>Nessuno scambio trovato.</p><p class=\"sub\">Prova a cambiare ricerca o filtro.</p></div>";
+    }
+    var visible = list.slice(0, state.historyLimit), totals = {}, cur = null;
+    list.forEach(function (t) { var k = monthKey(historyDate(t)); totals[k] = (totals[k] || 0) + 1; });
+    visible.forEach(function (t) {
+      var k = monthKey(historyDate(t));
+      if (k !== cur) {
+        if (cur !== null) html += "</div>";
+        cur = k;
+        html += '<h4 class="history-month">' + monthLabel(historyDate(t)) + '<span class="month-count">' + totals[k] + '</span></h4><div class="trade-grid">';
+      }
+      html += tradeCard(t);
+    });
+    html += "</div>";
+    if (list.length > HISTORY_PAGE) {
+      var remaining = list.length - visible.length;
+      html += '<div class="history-more"><span class="history-shown">Mostrati ' + visible.length + " di " + list.length + "</span>" +
+        (remaining > 0 ? '<button type="button" class="btn-ghost" data-action="history-more">Mostra altri ' + Math.min(HISTORY_PAGE, remaining) + "</button>" : "") + "</div>";
+    }
+    return html;
+  }
+
+  function renderHistorySection() {
+    if (state.historyTrades.length === 0) return "";
+    return '<section class="trade-section history"><h3>' + icon("clock") + " Storico (" + state.historyTrades.length + ")</h3>" +
+      renderSearchBox("history-search", "Cerca per utente o oggetto", state.historySearch) +
+      '<div id="history-body">' + renderHistoryBody() + "</div></section>";
+  }
+
+  function updateHistory() {
+    var box = document.getElementById("history-body");
+    if (!box) { render(); return; }
+    /* se si stava usando un chip da tastiera, il focus torna su quello dopo il ridisegno */
+    var ae = document.activeElement;
+    var focusFilter = (ae && ae.getAttribute && ae.getAttribute("data-action") === "history-filter") ? ae.getAttribute("data-filter") : null;
+    box.innerHTML = renderHistoryBody();
+    if (focusFilter) { var nb = box.querySelector('[data-filter="' + focusFilter + '"]'); if (nb) nb.focus(); }
   }
 
   function renderTradesTab() {
@@ -1080,7 +1255,7 @@
         '<section class="trade-section"><h3>' + icon("send") + " Inviate " + (state.outgoingTrades.length > 0 ? "(" + state.outgoingTrades.length + ")" : "") + "</h3>" +
         (state.outgoingTrades.length === 0 ? '<p class="none">Nessuna proposta inviata al momento.</p>' : '<div class="trade-grid">' + state.outgoingTrades.map(tradeCard).join("") + "</div>") +
         "</section>" +
-        (state.historyTrades.length > 0 ? '<section class="trade-section history"><h3>' + icon("clock") + " Storico</h3><div class=\"trade-grid\">" + state.historyTrades.map(tradeCard).join("") + "</div></section>" : "");
+        renderHistorySection();
     }
     return '<div class="section-head"><h2 class="display">Scambi</h2><button data-action="refresh-trades" class="btn-ghost">' + icon("refresh", state.tradesLoading ? "spin-sm" : "") + " Aggiorna</button></div>" + body;
   }
@@ -1134,7 +1309,7 @@
       return;
     }
     /* alcuni campi (aggiungi amico, ricerca community) non devono perdere focus e cursore se la pagina si ridisegna mentre si scrive */
-    var FOCUS_PRESERVE_IDS = ["friend-username", "community-search"];
+    var FOCUS_PRESERVE_IDS = ["friend-username", "community-search", "inventory-search", "history-search"];
     var active = document.activeElement;
     var keepFocusId = (active && FOCUS_PRESERVE_IDS.indexOf(active.id) !== -1) ? active.id : null;
     var selStart = keepFocusId ? active.selectionStart : null, selEnd = keepFocusId ? active.selectionEnd : null;
@@ -1189,6 +1364,9 @@
     else if (action === "close-lightbox") { closeLightbox(); }
     else if (action === "lightbox-prev") { lightboxStep(-1); }
     else if (action === "lightbox-next") { lightboxStep(1); }
+    else if (action === "clear-search") { clearSearch(t.dataset.target); }
+    else if (action === "history-filter") { state.historyFilter = t.dataset.filter; state.historyLimit = HISTORY_PAGE; updateHistory(); }
+    else if (action === "history-more") { state.historyLimit += HISTORY_PAGE; updateHistory(); }
   });
 
   document.addEventListener("submit", function (e) {
@@ -1209,6 +1387,8 @@
     else if (e.target && e.target.id === "new-username") state.usernameInput = e.target.value;
     else if (e.target && e.target.id === "friend-username") state.friendInput = e.target.value;
     else if (e.target && e.target.id === "community-search") { state.communitySearch = e.target.value; render(); }
+    else if (e.target && e.target.id === "inventory-search") { state.inventorySearch = e.target.value; syncSearchBox(e.target); updateInventoryResults(); }
+    else if (e.target && e.target.id === "history-search") { state.historySearch = e.target.value; state.historyLimit = HISTORY_PAGE; syncSearchBox(e.target); updateHistory(); }
   });
 
   document.addEventListener("keydown", function (e) {

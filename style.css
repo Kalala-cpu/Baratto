@@ -192,6 +192,33 @@
   .community-search input::placeholder { color: var(--parchment-dim); }
   .community-search input:focus { outline: none; border-color: var(--brass); }
 
+  /* barra di ricerca generica (inventario, storico) con pulsante di cancellazione */
+  .search-box { position: relative; display: flex; align-items: center; margin-bottom: 1.25rem; }
+  .search-box > .icon { position: absolute; left: 0.875rem; color: var(--parchment-dim); pointer-events: none; }
+  .search-box input { -webkit-appearance: none; appearance: none; width: 100%; background: var(--panel); border: 1px solid var(--hairline); border-radius: 0.375rem; color: var(--parchment); padding: 0.65rem 2.5rem; font-size: 0.875rem; font-family: inherit; transition: border-color .15s; }
+  .search-box input::placeholder { color: var(--parchment-dim); }
+  .search-box input:focus { outline: none; border-color: var(--brass); }
+  .search-box input::-webkit-search-cancel-button, .search-box input::-webkit-search-decoration { -webkit-appearance: none; appearance: none; }
+  .search-clear { position: absolute; right: 0.375rem; display: none; align-items: center; justify-content: center; background: transparent; border: none; color: var(--parchment-dim); padding: 0.375rem; border-radius: 0.375rem; cursor: pointer; transition: color .15s, background .15s; }
+  .search-clear:hover { color: var(--parchment); background: var(--hairline); }
+  .search-clear:focus-visible { outline: 2px solid var(--brass); outline-offset: 1px; }
+  .search-box.has-value .search-clear { display: flex; }
+
+  /* storico scambi: filtri, mesi, "mostra altri" */
+  .history .search-box { margin-bottom: 0.75rem; }
+  .history .empty-state { padding: 2.5rem 1rem; }
+  .filter-chips { display: flex; flex-wrap: wrap; gap: 0.375rem; margin-bottom: 1rem; }
+  .filter-chip { display: inline-flex; align-items: center; gap: 0.4rem; background: transparent; border: 1px solid var(--hairline); color: var(--parchment-dim); font-size: 0.75rem; font-family: inherit; padding: 0.3rem 0.7rem; border-radius: 999px; cursor: pointer; transition: color .15s, border-color .15s, background .15s; }
+  .filter-chip:hover { color: var(--parchment); border-color: var(--hairline-strong); }
+  .filter-chip.active { background: var(--panel-raised); color: var(--parchment); border-color: var(--brass); }
+  .filter-chip:focus-visible { outline: 2px solid var(--brass); outline-offset: 2px; }
+  .filter-chip .chip-count { font-size: 0.7rem; opacity: .7; font-variant-numeric: tabular-nums; }
+  .history-month { display: flex; align-items: baseline; gap: 0.5rem; margin: 1.5rem 0 0.75rem; padding-bottom: 0.375rem; border-bottom: 1px solid var(--hairline); font-size: 0.8125rem; font-weight: 600; color: var(--parchment); text-transform: capitalize; }
+  .filter-chips + .history-month { margin-top: 0.25rem; }
+  .history-month .month-count { font-size: 0.75rem; font-weight: 400; color: var(--parchment-dim); }
+  .history-more { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; margin-top: 1.25rem; }
+  .history-shown { font-size: 0.75rem; color: var(--parchment-dim); }
+
   .avatar { background: var(--panel-raised); color: var(--brass); border: 1px solid var(--hairline); border-radius: 999px; display: flex; align-items: center; justify-content: center; font-weight: 600; flex-shrink: 0; }
   .avatar.md { width: 2.25rem; height: 2.25rem; font-size: 0.875rem; }
   .avatar.sm { width: 1.75rem; height: 1.75rem; font-size: 0.75rem; }
