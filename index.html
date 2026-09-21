@@ -80,6 +80,24 @@
 
   .btn-ghost { background: transparent; border: 1px solid var(--hairline); color: var(--parchment-dim); font-size: 0.75rem; padding: 0.375rem 0.625rem; border-radius: 0.375rem; cursor: pointer; display: inline-flex; align-items: center; gap: 0.375rem; font-family: inherit; transition: color .15s, border-color .15s; }
   .btn-ghost:hover:not(:disabled) { color: var(--parchment); border-color: var(--hairline-strong); }
+  .btn-ghost:disabled { opacity: .6; cursor: default; }
+  .btn-ghost.friend-accept { color: var(--verdigris); border-color: var(--verdigris); }
+  .btn-ghost.friend-accept:hover:not(:disabled) { color: var(--verdigris); filter: brightness(1.15); }
+
+  /* amici */
+  .friend-add { display: flex; align-items: flex-end; gap: 0.75rem; margin-bottom: 2rem; padding: 1rem; background: var(--panel); border: 1px solid var(--hairline); border-radius: 0.375rem; }
+  .friend-add .field { flex: 1; min-width: 0; margin: 0; }
+  @media (max-width: 480px) { .friend-add { flex-direction: column; align-items: stretch; } }
+  .friend-card { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; background: var(--panel); border: 1px solid var(--hairline); border-radius: 0.375rem; padding: 0.75rem 1rem; }
+  .friend-card .who { display: flex; align-items: center; gap: 0.75rem; min-width: 0; }
+  .friend-card .who > div:last-child { min-width: 0; }
+  .friend-card .who .name { font-size: 0.875rem; font-weight: 500; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .friend-card .who .sub { font-size: 0.75rem; color: var(--parchment-dim); margin: 0.1rem 0 0; display: flex; align-items: center; gap: 0.25rem; }
+  .friend-card .who .sub .icon { width: 11px; height: 11px; }
+  .friend-actions { display: flex; align-items: center; gap: 0.5rem; flex-shrink: 0; }
+  .friend-actions .btn-accept, .friend-actions .btn-decline { flex: none; padding: 0.45rem 0.7rem; }
+  .friend-pill { display: inline-flex; align-items: center; gap: 0.375rem; font-size: 0.75rem; font-weight: 500; color: var(--verdigris); background: var(--verdigris-dim); border: 1px solid var(--verdigris-dim); padding: 0.375rem 0.625rem; border-radius: 0.375rem; }
+  .user-row .name .badge { margin-left: 0.375rem; vertical-align: middle; }
 
   .btn-google { width: 100%; background: var(--panel-raised); border: 1px solid var(--hairline-strong); color: var(--parchment); font-size: 0.875rem; font-weight: 600; padding: 0.625rem 1rem; border-radius: 0.375rem; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 0.625rem; font-family: inherit; transition: border-color .15s; }
   .btn-google:hover:not(:disabled) { border-color: var(--brass); }
@@ -101,8 +119,13 @@
   .greet { font-size: 0.875rem; color: var(--parchment-dim); }
   .greet strong { color: var(--parchment); font-weight: 500; }
   @media (max-width: 640px) { .greet { display: none; } }
-  .tab-nav { max-width: 56rem; margin: 0 auto; padding: 0 1rem; display: flex; gap: 1.25rem; }
-  .tab-btn { background: transparent; border: none; border-bottom: 2px solid transparent; color: var(--parchment-dim); font-size: 0.875rem; padding: 0.1rem 0 0.625rem; cursor: pointer; display: inline-flex; align-items: center; gap: 0.375rem; font-family: inherit; transition: color .15s, border-color .15s; }
+  .tab-nav { max-width: 56rem; margin: 0 auto; padding: 0 1rem; display: flex; gap: 1.25rem; overflow-x: auto; scrollbar-width: none; }
+  .tab-nav::-webkit-scrollbar { display: none; }
+  .tab-btn { background: transparent; border: none; border-bottom: 2px solid transparent; color: var(--parchment-dim); font-size: 0.875rem; padding: 0.1rem 0 0.625rem; cursor: pointer; display: inline-flex; align-items: center; gap: 0.375rem; font-family: inherit; white-space: nowrap; flex-shrink: 0; transition: color .15s, border-color .15s; }
+  @media (max-width: 420px) {
+    .tab-nav { gap: 0.8rem; padding: 0 0.75rem; }
+    .tab-btn { font-size: 0.8125rem; }
+  }
   .tab-btn.active { color: var(--parchment); border-color: var(--brass); }
   .tab-btn:not(.active):hover { color: var(--parchment); }
   .tab-badge { background: var(--brass); color: var(--brass-ink); border-radius: 999px; width: 16px; height: 16px; display: inline-flex; align-items: center; justify-content: center; font-size: 0.65rem; font-weight: 700; }
@@ -112,7 +135,8 @@
 
   .main { flex: 1; }
   .content { max-width: 56rem; margin: 0 auto; padding: 1.5rem 1rem; }
-  .section-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 1.5rem; }
+  .section-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem; margin-bottom: 1.5rem; }
+  .head-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 0.5rem; }
   .section-head h2 { font-size: 1.25rem; font-weight: 600; margin: 0; }
   .section-sub { font-size: 0.875rem; color: var(--parchment-dim); margin: 0.125rem 0 0; }
 
@@ -260,6 +284,8 @@
     plus: '<path d="M12 5v14M5 12h14"/>',
     image: '<rect x="3" y="4" width="18" height="16" rx="1.5"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="M21 16l-5.5-5.5L4 21"/>',
     package: '<path d="M4 8l8-4 8 4v8l-8 4-8-4V8z"/><path d="M4 8l8 4 8-4M12 12v8"/>',
+    "user-plus": '<circle cx="9" cy="7.5" r="3.5"/><path d="M2.5 20c0-3.59 2.91-6.5 6.5-6.5s6.5 2.91 6.5 6.5"/><path d="M19 8v6M16 11h6"/>',
+    "user-check": '<circle cx="9" cy="7.5" r="3.5"/><path d="M2.5 20c0-3.59 2.91-6.5 6.5-6.5s6.5 2.91 6.5 6.5"/><path d="M16 11.5l2.2 2.2L22 9.5"/>',
     users: '<circle cx="8.5" cy="8" r="3"/><path d="M2.5 20c0-3.31 2.69-6 6-6s6 2.69 6 6"/><path d="M16 8.5a2.5 2.5 0 1 0 0-5"/><path d="M14.5 14.16A5.99 5.99 0 0 1 21.5 20"/>',
     swap: '<path d="M4 8h15M15 4l4 4-4 4"/><path d="M20 16H5M9 12l-4 4 4 4"/>',
     check: '<path d="M5 12.5l5 5L19 7"/>',
@@ -333,8 +359,15 @@
     return "Errore imprevisto. Riprova.";
   }
 
+  /* messaggio d'errore per le operazioni sul database: se mancano le regole, lo dice chiaramente */
+  function dbErrorMessage(err, fallback) {
+    var denied = err && (err.code === "PERMISSION_DENIED" || /permission_denied/i.test(err.message || ""));
+    return denied ? "Permesso negato dalle regole del database: aggiungi il nodo friendRequests nelle regole di Firebase." : fallback;
+  }
+
   /* ============ utilita' ============ */
   var USERNAME_RE = /^[a-zA-Z0-9_]{3,20}$/;
+  function sameUser(a, b) { return String(a || "").toLowerCase() === String(b || "").toLowerCase(); }
   var MAX_ITEM_PHOTOS = 6;
   function genId() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
 
@@ -406,10 +439,12 @@
     showAddItem: false, newItemName: "", newItemPhotos: [], addBusy: false,
     showTradeBuilder: false, wantIds: [], offerIds: [], tradeBusy: false,
     incomingTrades: [], outgoingTrades: [], historyTrades: [], tradesLoading: false, respondingId: null,
+    incomingFriendReqs: [], outgoingFriendReqs: [], friends: [], friendsSig: "", friendsLoading: false, friendInput: "", friendAddBusy: false, friendBusyId: null,
     lightbox: null
   };
   var msgTimer = null;
   var tradesPollInterval = null;
+  var friendsPollInterval = null;
 
   function notify(type, text) {
     state.message = { type: type, text: text };
@@ -431,6 +466,7 @@
     render();
     loadMyInventory();
     loadTrades(true);
+    loadFriends(true);
     if (!silent) notify("success", (isNew ? "Benvenuto, " : "Bentornato, ") + username + "!");
   }
 
@@ -536,10 +572,12 @@
   }
 
   function handleLogout() {
-    stopTradesPolling();
+    stopTradesPolling(); stopFriendsPolling();
     fbAuth.signOut();
     state.currentUser = null; state.myInventory = []; state.selectedUser = null; state.otherInventory = [];
     state.incomingTrades = []; state.outgoingTrades = []; state.historyTrades = []; state.communityUsers = [];
+    state.incomingFriendReqs = []; state.outgoingFriendReqs = []; state.friends = []; state.friendsSig = "";
+    state.friendInput = ""; state.friendAddBusy = false; state.friendBusyId = null; state.friendsLoading = false;
     state.tab = "inventory"; state.authMode = "login"; state.lightbox = null;
     state.needUsername = false; state.linkSentTo = null; state.authBusy = false; state.freshLogin = false; state.authError = "";
     render();
@@ -643,6 +681,7 @@
   function loadCommunity() {
     if (!state.currentUser) return;
     state.communityLoading = true; render();
+    loadFriends(true, true);
     var me = state.currentUser.toLowerCase();
     dbGet("usernames").then(function (users) {
       users = users || {};
@@ -665,6 +704,7 @@
     state.selectedUser = username; state.otherLoading = true;
     state.wantIds = []; state.offerIds = []; state.showTradeBuilder = false;
     render();
+    loadFriends(true, true);
     getInventory(username.toLowerCase()).then(function (inv) {
       state.otherInventoryTotal = inv.length;
       state.otherInventory = inv.filter(isAvailable);
@@ -714,6 +754,158 @@
       state.tradeBusy = false; notify("error", "Errore nell'invio della proposta."); render();
     });
   }
+
+  /* ============ amici ============
+     Ogni relazione e' un record friendRequests/{id} = { id, fromUser, toUser, status, createdAt, respondedAt }.
+     status "pending" = richiesta in attesa, "accepted" = amicizia attiva. Rifiutare, annullare o rimuovere un amico
+     cancella il record. Gli amici sono i record "accepted" in cui compaio come fromUser o toUser. */
+  function queryFriendRequests(field) {
+    return fbDb.ref("friendRequests").orderByChild(field).equalTo(state.currentUser).once("value").then(function (s) { return toArray(s.val()); });
+  }
+
+  function fetchFriendData() {
+    var me = state.currentUser;
+    return Promise.all([queryFriendRequests("fromUser"), queryFriendRequests("toUser")]).then(function (res) {
+      var seen = {}, mine = [];
+      res[0].concat(res[1]).forEach(function (r) { if (r && r.id && !seen[r.id]) { seen[r.id] = true; mine.push(r); } });
+      mine.sort(function (a, b) { return b.createdAt - a.createdAt; });
+      var byName = {}, friends = [];
+      mine.filter(function (r) { return r.status === "accepted"; }).forEach(function (r) {
+        var other = sameUser(r.fromUser, me) ? r.toUser : r.fromUser;
+        var key = String(other).toLowerCase();
+        if (byName[key]) return;
+        byName[key] = true;
+        friends.push({ id: r.id, username: other, since: r.respondedAt || r.createdAt });
+      });
+      friends.sort(function (a, b) { return a.username.localeCompare(b.username); });
+      return {
+        incoming: mine.filter(function (r) { return r.status === "pending" && sameUser(r.toUser, me); }),
+        outgoing: mine.filter(function (r) { return r.status === "pending" && sameUser(r.fromUser, me); }),
+        friends: friends
+      };
+    });
+  }
+
+  /* applica i dati allo stato; restituisce true se qualcosa e' cambiato */
+  function applyFriendData(d) {
+    var sig = JSON.stringify(d), changed = sig !== state.friendsSig;
+    state.friendsSig = sig;
+    state.incomingFriendReqs = d.incoming; state.outgoingFriendReqs = d.outgoing; state.friends = d.friends;
+    return changed;
+  }
+
+  /* silent: niente spinner. onlyIfChanged: ridisegna solo se i dati sono cambiati (per il polling, cosi' non si perde il focus) */
+  function loadFriends(silent, onlyIfChanged) {
+    if (!state.currentUser) return Promise.resolve();
+    if (!silent) { state.friendsLoading = true; render(); }
+    var me = state.currentUser;
+    return fetchFriendData().then(function (d) {
+      return state.currentUser === me ? applyFriendData(d) : false;
+    }).catch(function (e) {
+      console.error("loadFriends", e);
+      if (!silent) notify("error", dbErrorMessage(e, "Impossibile caricare gli amici."));
+      return true;
+    }).then(function (changed) {
+      var wasLoading = state.friendsLoading;
+      state.friendsLoading = false;
+      if (onlyIfChanged && !changed && !wasLoading) return;
+      render();
+    });
+  }
+
+  function friendStatusWith(username) {
+    var i, list;
+    list = state.friends;
+    for (i = 0; i < list.length; i++) if (sameUser(list[i].username, username)) return { kind: "friend", id: list[i].id };
+    list = state.outgoingFriendReqs;
+    for (i = 0; i < list.length; i++) if (sameUser(list[i].toUser, username)) return { kind: "sent", id: list[i].id };
+    list = state.incomingFriendReqs;
+    for (i = 0; i < list.length; i++) if (sameUser(list[i].fromUser, username)) return { kind: "received", id: list[i].id };
+    return { kind: "none", id: null };
+  }
+
+  function sendFriendRequest(rawName) {
+    var name = (rawName || "").trim();
+    if (!USERNAME_RE.test(name)) { notify("error", "Inserisci uno username valido: 3-20 caratteri tra lettere, numeri e underscore."); return; }
+    if (sameUser(name, state.currentUser)) { notify("error", "Non puoi aggiungere te stesso agli amici."); return; }
+    state.friendAddBusy = true; render();
+    /* dati freschi: cosi' evitiamo doppioni se l'altro utente ci ha appena scritto */
+    Promise.all([dbGet("usernames/" + name.toLowerCase()), fetchFriendData()]).then(function (res) {
+      var rec = res[0];
+      applyFriendData(res[1]);
+      if (!rec) { state.friendAddBusy = false; notify("error", "Nessun utente con questo username."); return; }
+      var target = rec.username || name;
+      var st = friendStatusWith(target);
+      if (st.kind === "friend") { state.friendAddBusy = false; notify("error", "Tu e " + target + " siete già amici."); return; }
+      if (st.kind === "sent") { state.friendAddBusy = false; notify("error", "Hai già inviato una richiesta a " + target + "."); return; }
+      if (st.kind === "received") { state.friendAddBusy = false; state.friendInput = ""; return respondFriendRequest(st.id, true); }
+      var req = { id: genId(), fromUser: state.currentUser, toUser: target, status: "pending", createdAt: Date.now() };
+      return dbSet("friendRequests/" + req.id, req).then(function () {
+        state.friendAddBusy = false; state.friendInput = "";
+        notify("success", "Richiesta di amicizia inviata a " + target + ".");
+        return loadFriends(true);
+      });
+    }).catch(function (err) {
+      console.error("sendFriendRequest", err);
+      state.friendAddBusy = false; notify("error", dbErrorMessage(err, "Errore nell'invio della richiesta."));
+    });
+  }
+
+  function respondFriendRequest(id, accept) {
+    state.friendBusyId = id; render();
+    var ref = fbDb.ref("friendRequests/" + id);
+    return dbGet("friendRequests/" + id).then(function (fresh) {
+      if (!fresh || fresh.status !== "pending") { notify("error", "Questa richiesta non è più valida."); return; }
+      if (accept) {
+        return ref.update({ status: "accepted", respondedAt: Date.now() }).then(function () {
+          notify("success", "Ora tu e " + fresh.fromUser + " siete amici!");
+        });
+      }
+      return ref.remove().then(function () { notify("success", "Richiesta rifiutata."); });
+    }).catch(function (err) {
+      console.error("respondFriendRequest", err);
+      notify("error", dbErrorMessage(err, "Errore durante l'operazione. Riprova."));
+    }).then(function () { state.friendBusyId = null; return loadFriends(true); });
+  }
+
+  function cancelFriendRequest(id) {
+    state.friendBusyId = id; render();
+    dbGet("friendRequests/" + id).then(function (fresh) {
+      if (!fresh) { notify("error", "Questa richiesta non esiste più."); return; }
+      if (fresh.status !== "pending") { notify("error", "La richiesta è già stata accettata."); return; }
+      return fbDb.ref("friendRequests/" + id).remove().then(function () { notify("success", "Richiesta annullata."); });
+    }).catch(function (err) {
+      console.error("cancelFriendRequest", err);
+      notify("error", dbErrorMessage(err, "Errore durante l'annullamento."));
+    }).then(function () { state.friendBusyId = null; loadFriends(true); });
+  }
+
+  function removeFriend(id, username) {
+    if (!window.confirm("Rimuovere " + username + " dagli amici?")) return;
+    state.friendBusyId = id; render();
+    dbGet("friendRequests/" + id).then(function (fresh) {
+      if (!fresh || fresh.status !== "accepted") { notify("error", "Questa amicizia non esiste più."); return; }
+      return fbDb.ref("friendRequests/" + id).remove().then(function () { notify("success", username + " è stato rimosso dagli amici."); });
+    }).catch(function (err) {
+      console.error("removeFriend", err);
+      notify("error", dbErrorMessage(err, "Errore durante la rimozione."));
+    }).then(function () { state.friendBusyId = null; loadFriends(true); });
+  }
+
+  function handleAddFriendSubmit(e) {
+    e.preventDefault();
+    var el = document.getElementById("friend-username");
+    sendFriendRequest(el ? el.value : state.friendInput);
+  }
+
+  function openFriend(username) {
+    stopFriendsPolling();
+    state.tab = "community";
+    openUser(username);
+  }
+
+  function startFriendsPolling() { stopFriendsPolling(); friendsPollInterval = setInterval(function () { loadFriends(true, true); }, 15000); }
+  function stopFriendsPolling() { if (friendsPollInterval) { clearInterval(friendsPollInterval); friendsPollInterval = null; } }
 
   /* ============ scambi ============ */
   function queryTrades(field) {
@@ -805,6 +997,7 @@
     if (tabId === "inventory") { loadMyInventory(); render(); }
     if (tabId === "community" && !state.selectedUser) loadCommunity();
     if (tabId === "trades") { loadTrades(); startTradesPolling(); } else { stopTradesPolling(); }
+    if (tabId === "friends") { loadFriends(); startFriendsPolling(); } else { stopFriendsPolling(); }
   }
   function startTradesPolling() { stopTradesPolling(); tradesPollInterval = setInterval(function () { loadTrades(true); }, 15000); }
   function stopTradesPolling() { if (tradesPollInterval) { clearInterval(tradesPollInterval); tradesPollInterval = null; } }
@@ -965,12 +1158,76 @@
       body = '<div class="user-list">' + state.communityUsers.map(function (u) {
         return '<button class="user-row" data-action="open-user" data-username="' + escapeHtml(u.username) + '">' +
           '<div class="left"><div class="avatar md">' + escapeHtml(u.username.charAt(0).toUpperCase()) + '</div>' +
-          '<div><p class="name">' + escapeHtml(u.username) + '</p><p class="count">' + u.count + " oggett" + (u.count === 1 ? "o" : "i") + "</p></div></div>" +
+          '<div><p class="name">' + escapeHtml(u.username) + (friendStatusWith(u.username).kind === "friend" ? '<span class="badge accepted">Amico</span>' : "") + '</p><p class="count">' + u.count + " oggett" + (u.count === 1 ? "o" : "i") + "</p></div></div>" +
           icon("chevron-left", "chevron") + "</button>";
       }).join("") + "</div>";
     }
     return '<div class="section-head"><div><h2 class="display">Community</h2><p class="section-sub">Sfoglia gli inventari degli altri utenti</p></div>' +
       '<button data-action="refresh-community" class="btn-ghost">' + icon("refresh", state.communityLoading ? "spin-sm" : "") + " Aggiorna</button></div>" + body;
+  }
+
+  /* pulsante/stato amicizia mostrato nel profilo di un altro utente */
+  function friendActionButton(username) {
+    var st = friendStatusWith(username);
+    var busy = (state.friendAddBusy || (st.id && state.friendBusyId === st.id)) ? "disabled" : "";
+    if (st.kind === "friend") return '<span class="friend-pill">' + icon("user-check") + " Amici</span>";
+    if (st.kind === "sent") return '<button class="btn-ghost" disabled>' + icon("clock") + " Richiesta inviata</button>";
+    if (st.kind === "received") return '<button class="btn-ghost friend-accept" data-action="accept-friend" data-id="' + st.id + '" ' + busy + ">" + icon("check") + " Accetta richiesta</button>";
+    return '<button class="btn-ghost" data-action="add-friend" data-username="' + escapeHtml(username) + '" ' + busy + ">" + icon("user-plus") + " Aggiungi amico</button>";
+  }
+
+  function friendRequestCard(r, incoming) {
+    var name = incoming ? r.fromUser : r.toUser;
+    var busy = state.friendBusyId === r.id ? "disabled" : "";
+    var spin = state.friendBusyId === r.id;
+    var actions = incoming ?
+      '<button class="btn-accept" data-action="accept-friend" data-id="' + r.id + '" ' + busy + ">" + (spin ? icon("loader", "spin-sm") : icon("check")) + " Accetta</button>" +
+      '<button class="btn-decline" data-action="decline-friend" data-id="' + r.id + '" ' + busy + ">" + icon("x") + " Rifiuta</button>" :
+      '<button class="btn-ghost" data-action="cancel-friend-request" data-id="' + r.id + '" ' + busy + ">" + (spin ? icon("loader", "spin-sm") : icon("x")) + " Annulla</button>";
+    return '<div class="friend-card"><div class="who"><div class="avatar md">' + escapeHtml(name.charAt(0).toUpperCase()) + '</div>' +
+      '<div><p class="name">' + escapeHtml(name) + '</p><p class="sub">' + icon("clock") + " " + timeAgo(r.createdAt) + "</p></div></div>" +
+      '<div class="friend-actions">' + actions + "</div></div>";
+  }
+
+  function friendCard(f) {
+    var busy = state.friendBusyId === f.id ? "disabled" : "";
+    var since = f.since ? new Date(f.since).toLocaleDateString("it-IT", { day: "numeric", month: "short", year: "numeric" }) : "";
+    return '<div class="friend-card"><div class="who"><div class="avatar md">' + escapeHtml(f.username.charAt(0).toUpperCase()) + '</div>' +
+      '<div><p class="name">' + escapeHtml(f.username) + '</p>' + (since ? '<p class="sub">Amici dal ' + since + "</p>" : "") + "</div></div>" +
+      '<div class="friend-actions">' +
+        '<button class="btn-ghost" data-action="open-friend" data-username="' + escapeHtml(f.username) + '">' + icon("package") + " Inventario</button>" +
+        '<button class="icon-btn" data-action="remove-friend" data-id="' + f.id + '" data-username="' + escapeHtml(f.username) + '" title="Rimuovi dagli amici" ' + busy + ">" + icon("x") + "</button>" +
+      "</div></div>";
+  }
+
+  function renderFriendsTab() {
+    var inc = state.incomingFriendReqs, out = state.outgoingFriendReqs, fr = state.friends, body;
+    if (state.friendsLoading) {
+      body = '<div class="spinner-wrap">' + icon("loader", "spin") + "</div>";
+    } else {
+      body = "";
+      if (inc.length > 0) {
+        body += '<section class="trade-section"><h3>' + icon("inbox") + " Richieste ricevute (" + inc.length + ')</h3><div class="user-list">' +
+          inc.map(function (r) { return friendRequestCard(r, true); }).join("") + "</div></section>";
+      }
+      if (out.length > 0) {
+        body += '<section class="trade-section"><h3>' + icon("send") + " Richieste inviate (" + out.length + ')</h3><div class="user-list">' +
+          out.map(function (r) { return friendRequestCard(r, false); }).join("") + "</div></section>";
+      }
+      body += '<section class="trade-section"><h3>' + icon("users") + " I tuoi amici " + (fr.length > 0 ? "(" + fr.length + ")" : "") + "</h3>" +
+        (fr.length === 0 ?
+          '<div class="empty-state">' + icon("users") + "<p>Non hai ancora amici.</p><p class=\"sub\">Invia una richiesta con lo username, oppure dalla scheda Community.</p></div>" :
+          '<div class="user-list">' + fr.map(friendCard).join("") + "</div>") +
+        "</section>";
+    }
+    return '<div class="section-head"><div><h2 class="display">Amici</h2><p class="section-sub">Aggiungi altri collezionisti e ritrova subito i loro inventari</p></div>' +
+      '<button data-action="refresh-friends" class="btn-ghost">' + icon("refresh", state.friendsLoading ? "spin-sm" : "") + " Aggiorna</button></div>" +
+      '<form id="add-friend-form" class="friend-add" novalidate>' +
+        '<div class="field has-icon"><label for="friend-username">Aggiungi con lo username</label>' +
+          '<div class="field-icon-wrap">' + icon("user-plus") + '<input type="text" id="friend-username" placeholder="mario_rossi" maxlength="20" autocomplete="off" autocapitalize="none" spellcheck="false" value="' + escapeHtml(state.friendInput || "") + '" /></div></div>' +
+        '<button type="submit" class="btn-primary" ' + (state.friendAddBusy ? "disabled" : "") + ">" +
+          (state.friendAddBusy ? icon("loader", "spin-sm") : "") + "Invia richiesta</button>" +
+      "</form>" + body;
   }
 
   function renderTradeBuilder() {
@@ -1024,7 +1281,8 @@
     }
     return '<button data-action="back-to-community" class="link-btn" style="margin-bottom:1.25rem;">' + icon("chevron-left") + " Torna alla community</button>" +
       '<div class="section-head"><div><h2 class="display">Inventario di ' + escapeHtml(state.selectedUser) + '</h2><p class="section-sub">' + count + " oggett" + (count === 1 ? "o" : "i") + "</p></div>" +
-      (!state.showTradeBuilder && count > 0 ? '<button data-action="open-trade-builder" class="btn-primary">' + icon("swap") + " Proponi scambio</button>" : "") +
+      (!state.showTradeBuilder ? '<div class="head-actions">' + friendActionButton(state.selectedUser) +
+        (count > 0 ? '<button data-action="open-trade-builder" class="btn-primary">' + icon("swap") + " Proponi scambio</button>" : "") + "</div>" : "") +
       "</div>" + body;
   }
 
@@ -1100,6 +1358,7 @@
     var navTabs = [
       { id: "inventory", label: "Inventario", i: "package" },
       { id: "community", label: "Community", i: "users" },
+      { id: "friends", label: "Amici", i: "user-plus", badge: state.incomingFriendReqs.length },
       { id: "trades", label: "Scambi", i: "swap", badge: state.incomingTrades.length }
     ];
     var tabsHtml = navTabs.map(function (t) {
@@ -1109,6 +1368,7 @@
     var tabContent = "";
     if (state.tab === "inventory") tabContent = renderInventoryTab();
     else if (state.tab === "community") tabContent = state.selectedUser ? renderOtherUserView() : renderCommunityTab();
+    else if (state.tab === "friends") tabContent = renderFriendsTab();
     else if (state.tab === "trades") tabContent = renderTradesTab();
 
     return '' +
@@ -1127,7 +1387,15 @@
       document.getElementById("app").innerHTML = '<div class="auth-wrap"><div class="auth-box" style="text-align:center;">' + icon("loader", "spin-sm") + "</div></div>";
       return;
     }
+    /* il campo "aggiungi amico" non deve perdere focus e cursore se la pagina si ridisegna mentre si scrive */
+    var active = document.activeElement;
+    var keepFocus = !!(active && active.id === "friend-username");
+    var selStart = keepFocus ? active.selectionStart : null, selEnd = keepFocus ? active.selectionEnd : null;
     document.getElementById("app").innerHTML = state.currentUser ? renderApp() : renderAuth();
+    if (keepFocus) {
+      var el = document.getElementById("friend-username");
+      if (el) { el.focus(); try { el.setSelectionRange(selStart, selEnd); } catch (err) {} }
+    }
   }
 
   /* ============ gestione eventi (delegazione) ============ */
@@ -1155,6 +1423,13 @@
     else if (action === "back-to-community") { backToCommunity(); }
     else if (action === "refresh-community") { loadCommunity(); }
     else if (action === "refresh-trades") { loadTrades(); }
+    else if (action === "refresh-friends") { loadFriends(); }
+    else if (action === "add-friend") { sendFriendRequest(t.dataset.username); }
+    else if (action === "accept-friend") { respondFriendRequest(t.dataset.id, true); }
+    else if (action === "decline-friend") { respondFriendRequest(t.dataset.id, false); }
+    else if (action === "cancel-friend-request") { cancelFriendRequest(t.dataset.id); }
+    else if (action === "remove-friend") { removeFriend(t.dataset.id, t.dataset.username); }
+    else if (action === "open-friend") { openFriend(t.dataset.username); }
     else if (action === "open-trade-builder") { state.showTradeBuilder = true; render(); }
     else if (action === "cancel-trade-builder") { state.showTradeBuilder = false; state.wantIds = []; state.offerIds = []; render(); }
     else if (action === "toggle-want") { toggleWant(t.dataset.id); }
@@ -1173,6 +1448,7 @@
     if (e.target && e.target.id === "auth-form") handleAuthSubmit(e);
     else if (e.target && e.target.id === "add-item-form") submitNewItem(e);
     else if (e.target && e.target.id === "username-form") handleClaimUsername(e);
+    else if (e.target && e.target.id === "add-friend-form") handleAddFriendSubmit(e);
   });
 
   document.addEventListener("change", function (e) {
@@ -1184,6 +1460,7 @@
     if (e.target && e.target.id === "new-item-name") state.newItemName = e.target.value;
     else if (e.target && e.target.id === "auth-email") state.authEmail = e.target.value;
     else if (e.target && e.target.id === "new-username") state.usernameInput = e.target.value;
+    else if (e.target && e.target.id === "friend-username") state.friendInput = e.target.value;
   });
 
   document.addEventListener("keydown", function (e) {
