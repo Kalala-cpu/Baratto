@@ -42,8 +42,19 @@
   }
 
   /* ============ Firebase (Auth + Realtime Database) ============ */
+  /* La chiave API viene inserita in fase di build (vedi deploy.yml) offuscata in Base64
+     e decodificata qui al volo. ATTENZIONE: e' solo un deterrente cosmetico contro chi
+     guarda il sorgente a occhio nudo (es. "view-source"), NON una vera protezione:
+     chiunque apra la scheda Network del browser vede comunque la chiave reale in chiaro
+     nelle richieste a Firebase, perche' deve necessariamente viaggiare cosi'. La
+     protezione vera si fa lato Google Cloud Console (restrizione della chiave per
+     referrer HTTP, cosi' funziona solo se chiamata dal dominio dell'app) e/o abilitando
+     Firebase App Check. */
+  function decodeObfuscatedKey(v) {
+    try { return atob(v); } catch (err) { return v; }
+  }
   var firebaseConfig = {
-    apiKey: "__FIREBASE_API_KEY__",
+    apiKey: decodeObfuscatedKey("__FIREBASE_API_KEY_B64__"),
     authDomain: "baratto-311e9.firebaseapp.com",
     databaseURL: "https://baratto-311e9-default-rtdb.europe-west1.firebasedatabase.app",
     projectId: "baratto-311e9",
@@ -398,8 +409,30 @@
       render();
     });
   }
+  /* controparte (l'altro utente coinvolto) di uno scambio rispetto all'utente corrente */
+  function otherPartyOf(t) {
+    var fromU = t.fromUser || t.from || "";
+    var toU = t.toUser || t.to || "";
+    return sameUser(fromU, state.currentUser) ? toU : fromU;
+  }
+  /* elenco (ordinato, senza duplicati) delle persone con cui l'utente ha scambi, per il
+     filtro "utente" della tab Scambi */
+  function historyCounterparts() {
+    var seen = {}, list = [];
+    (state.allTrades || []).forEach(function (t) {
+      var other = otherPartyOf(t);
+      if (other && !seen[other.toLowerCase()]) { seen[other.toLowerCase()] = true; list.push(other); }
+    });
+    list.sort(function (a, b) { return a.localeCompare(b); });
+    return list;
+  }
   function updateHistory() {
     var search = (state.historySearch || "").toLowerCase(), filter = state.historyFilter;
+    var userFilter = state.historyUserFilter || "";
+    /* i campi "date" HTML danno una stringa "YYYY-MM-DD": la interpretiamo come inizio/fine
+       giornata locale, cosi' il filtro include l'intera giornata scelta */
+    var dateFrom = state.historyDateFrom ? new Date(state.historyDateFrom + "T00:00:00").getTime() : null;
+    var dateTo = state.historyDateTo ? new Date(state.historyDateTo + "T23:59:59.999").getTime() : null;
     /* always filter from the full unmodified trade list */
     var source = state.allTrades || state.history || [];
     var h = source.filter(function (t) {
@@ -409,7 +442,10 @@
         (t.to || "").toLowerCase().indexOf(search) !== -1 ||
         (t.toUser || "").toLowerCase().indexOf(search) !== -1;
       var matchFilter = filter === "completed" ? t.accepted : filter === "pending" ? !t.accepted && !t.declined : t.declined;
-      return matchSearch && matchFilter;
+      var matchUser = !userFilter || sameUser(otherPartyOf(t), userFilter);
+      var created = t.created || 0;
+      var matchDate = (dateFrom === null || created >= dateFrom) && (dateTo === null || created <= dateTo);
+      return matchSearch && matchFilter && matchUser && matchDate;
     }).sort(function (a, b) { return (b.created || 0) - (a.created || 0); });
     /* store filtered result separately so state.allTrades stays intact */
     setState({ history: h });
@@ -512,7 +548,11 @@
         otherUserSearch: "",
         pendingChatMedia: null,
         chatMediaSending: false,
-        showDeleteAccountConfirm: false
+        showDeleteAccountConfirm: false,
+        tradeDuration: "",
+        historyUserFilter: "",
+        historyDateFrom: "",
+        historyDateTo: ""
       });
       render();
     });
@@ -903,6 +943,19 @@
     return ids.every(function (id) { return !!getItemById(id, arr); });
   }
 
+  /* durata di una proposta di scambio: state.tradeDuration e' la stringa scelta nel form
+     ("" = nessuna scadenza, di default), oppure un numero di giorni come stringa ("1","3",...).
+     Restituisce il timestamp di scadenza, o null se la proposta non scade mai. */
+  function computeTradeExpiry() {
+    var days = parseInt(state.tradeDuration, 10);
+    return (days && days > 0) ? Date.now() + days * 24 * 60 * 60 * 1000 : null;
+  }
+  /* true se una proposta ha una scadenza, non e' ancora stata accettata/rifiutata,
+     ed e' passata la scadenza */
+  function isTradeExpired(t) {
+    return !!(t && t.expiresAt && !t.accepted && !t.declined && Date.now() > t.expiresAt);
+  }
+
   /* proporre uno scambio dall'inventario di un utente (tab Community, non dalla chat):
      la proposta finisce comunque come messaggio nella chat con quella persona, cosi' la
      notifica (e le azioni Accetta/Rifiuta, con stato aggiornato in tempo reale) si vedono
@@ -926,12 +979,13 @@
       wantNames: wantNames,
       offerNames: offerNames,
       created: Date.now(),
+      expiresAt: computeTradeExpiry(),
       accepted: false,
       declined: false
     };
     var chatPath = "chats/" + chatIdFor(state.currentUser, state.selectedUser) + "/messages";
     dbSet("trades/" + trade.id, trade).then(function () {
-      setState({ showTradeBuilder: false, wantIds: [], offerIds: [] });
+      setState({ showTradeBuilder: false, wantIds: [], offerIds: [], tradeDuration: "" });
       setMessage("Scambio proposto!", "success");
       loadTrades();
       var msgId = genId();
@@ -943,14 +997,14 @@
   /* ============ proposta di scambio dalla chat ============ */
   function openChatTradeBuilder() {
     if (!state.chatTarget || state.chatTarget.type !== "friend") return;
-    setState({ showChatTradeBuilder: true, wantIds: [], offerIds: [], chatOtherInventory: [] });
+    setState({ showChatTradeBuilder: true, wantIds: [], offerIds: [], chatOtherInventory: [], tradeDuration: "" });
     render();
     getInventory(state.chatTarget.id.toLowerCase()).then(function (inv) {
       setState({ chatOtherInventory: inv });
       render();
     });
   }
-  function closeChatTradeBuilder() { setState({ showChatTradeBuilder: false, wantIds: [], offerIds: [] }); render(); }
+  function closeChatTradeBuilder() { setState({ showChatTradeBuilder: false, wantIds: [], offerIds: [], tradeDuration: "" }); render(); }
   function submitChatTrade() {
     if (!state.chatTarget || state.chatTarget.type !== "friend") return;
     if (!state.wantIds.length || !state.offerIds.length) { setMessage("Seleziona cosa vuoi e cosa offri.", "error"); return; }
@@ -970,12 +1024,13 @@
       wantNames: wantNames,
       offerNames: offerNames,
       created: Date.now(),
+      expiresAt: computeTradeExpiry(),
       accepted: false,
       declined: false
     };
     var path = chatMessagesPath();
     dbSet("trades/" + trade.id, trade).then(function () {
-      setState({ showChatTradeBuilder: false, wantIds: [], offerIds: [] });
+      setState({ showChatTradeBuilder: false, wantIds: [], offerIds: [], tradeDuration: "" });
       setMessage("Scambio proposto!", "success");
       loadTrades();
       if (path) {
@@ -1006,6 +1061,7 @@
         trade.declined = true;
         return dbSet("trades/" + tradeId, trade).then(function () {
           setMessage("Scambio rifiutato.", "success");
+          sendTradeSystemMessage(trade, "Scambio rifiutato.");
           loadTrades();
         });
       }
@@ -1047,6 +1103,7 @@
         return dbSet("trades/" + tradeId, trade);
       }).then(function () {
         setMessage("Scambio accettato!", "success");
+        sendTradeSystemMessage(trade, "Scambio accettato: gli oggetti sono stati scambiati.");
         loadTrades();
         loadInventory();
       });
@@ -1058,7 +1115,32 @@
   }
 
   function cancelTrade(tradeId) {
-    fbDb.ref("trades/" + tradeId).remove().then(function () { setMessage("Scambio annullato.", "success"); loadTrades(); }).catch(function (err) { setMessage("Errore: " + err.message, "error"); });
+    /* leggiamo la proposta PRIMA di cancellarla: dopo la remove() non sapremmo piu'
+       chi erano le due parti coinvolte, e quindi in quale chat mandare il messaggio
+       di sistema che avvisa dell'annullamento */
+    dbGet("trades/" + tradeId).then(function (trade) {
+      return fbDb.ref("trades/" + tradeId).remove().then(function () {
+        setMessage("Scambio annullato.", "success");
+        if (trade) sendTradeSystemMessage(trade, "Scambio annullato.");
+        loadTrades();
+      });
+    }).catch(function (err) { setMessage("Errore: " + err.message, "error"); });
+  }
+
+  /* ============ messaggio di sistema in chat per l'esito di uno scambio ============
+     Oltre alla card "Proposta di scambio" gia' presente in chat (che aggiorna da sola
+     il proprio stato leggendo la proposta via id), inviamo anche un messaggio a parte
+     quando lo scambio viene accettato/rifiutato/annullato, cosi' resta ben visibile
+     nel flusso della conversazione anche se la card e' scorsa piu' in alto. Non blocca
+     l'operazione principale se l'invio fallisce (non e' un dato critico). */
+  function sendTradeSystemMessage(trade, text) {
+    var fromU = trade.fromUser || trade.from || "";
+    var toU = trade.toUser || trade.to || "";
+    if (!fromU || !toU) return;
+    var path = "chats/" + chatIdFor(fromU, toU) + "/messages";
+    var msgId = genId();
+    var msg = { id: msgId, from: state.currentUser, type: "system", text: text, created: Date.now() };
+    dbSet(path + "/" + msgId, msg).catch(function () { /* non critico: solo informativo */ });
   }
 
   /* ============ notifica in tempo reale per scambi accettati/rifiutati ============
@@ -1118,11 +1200,14 @@
 
   /* ============ search & filter ============ */
   function clearSearch(target) {
-    if (target === "community") setState({ communitySearch: "" });
-    else if (target === "inventory") setState({ inventorySearch: "" });
-    else if (target === "history") setState({ historySearch: "", historyLimit: HISTORY_PAGE });
-    else if (target === "otherInventory") setState({ otherUserSearch: "" });
-    render();
+    if (target === "community") { setState({ communitySearch: "" }); render(); }
+    else if (target === "inventory") { setState({ inventorySearch: "" }); render(); }
+    /* "history"/"historyFilters" ricalcolano subito state.history (updateHistory chiama
+       gia' render() al suo interno), altrimenti il pulsante "cancella" azzererebbe lo
+       stato del filtro senza aggiornare la lista mostrata */
+    else if (target === "history") { setState({ historySearch: "", historyLimit: HISTORY_PAGE }); updateHistory(); }
+    else if (target === "historyFilters") { setState({ historyUserFilter: "", historyDateFrom: "", historyDateTo: "", historyLimit: HISTORY_PAGE }); updateHistory(); }
+    else if (target === "otherInventory") { setState({ otherUserSearch: "" }); render(); }
   }
   function syncSearchBox(el) { if (el && el.parentElement) { el.parentElement.classList.toggle("search-active", el.value.length > 0); } }
   function updateInventoryResults() {
@@ -1212,6 +1297,15 @@
       '<span class="trade-item-name">' + escapeHtml(item.name) + (unavailable ? ' <span class="trade-item-badge">non disponibile</span>' : '') + '</span>' +
       (selected ? icon("check") : '') +
       '</div>';
+  }
+
+  /* selettore durata riusato in entrambi i form di proposta scambio (community e chat).
+     Default "" = nessuna scadenza (infinita), coerente con lo stato iniziale del form. */
+  function renderTradeDurationField() {
+    var opts = [["", "Nessuna scadenza"], ["1", "1 giorno"], ["3", "3 giorni"], ["7", "7 giorni"], ["14", "14 giorni"], ["30", "30 giorni"]];
+    return '<div class="field trade-duration-field"><label>Durata della proposta</label><select id="trade-duration">' +
+      opts.map(function (o) { return '<option value="' + o[0] + '"' + (state.tradeDuration === o[0] ? " selected" : "") + '>' + o[1] + '</option>'; }).join("") +
+      '</select></div>';
   }
 
   function renderInventoryItem(item, isOwn) {
@@ -1346,6 +1440,7 @@
           return renderTradeItemCard(item, sel, "toggle-offer", true);
         }).join("") +
         '</div></div>' +
+        renderTradeDurationField() +
         '<div class="trade-actions"><button type="button" data-action="cancel-trade-builder" class="btn-ghost">Annulla</button><button type="button" data-action="submit-trade" class="btn-primary">Invia Proposta</button></div></div>';
     }
     return html;
@@ -1393,6 +1488,9 @@
 
   function renderChatMessageContent(m) {
     var type = m.type || "text";
+    if (type === "system") {
+      return '<div class="chat-system-msg">' + escapeHtml(m.text || "") + '</div>';
+    }
     if (type === "image") {
       return '<div class="chat-bubble-media" data-action="view-chat-media" data-id="' + escapeHtml(m.id) + '"><img src="' + escapeHtml(m.url) + '" alt="foto"/></div>';
     }
@@ -1401,7 +1499,8 @@
     }
     if (type === "trade") {
       var trade = (state.allTrades || []).filter(function (t) { return t.id === m.tradeId; })[0];
-      var status = trade ? (trade.accepted ? "accepted" : trade.declined ? "declined" : "pending") : "pending";
+      var expired = isTradeExpired(trade);
+      var status = trade ? (trade.accepted ? "accepted" : trade.declined ? "declined" : expired ? "expired" : "pending") : "pending";
       var isRecipient = trade && sameUser(trade.toUser || trade.to, state.currentUser);
       var isSender = trade && sameUser(trade.fromUser || trade.from, state.currentUser);
       var want = (m.wantNames || (trade && trade.wantNames) || []).map(escapeHtml).join(", ") || "—";
@@ -1410,7 +1509,7 @@
         '<div class="chat-trade-title">' + icon("swap") + ' Proposta di scambio</div>' +
         '<div class="chat-trade-row"><span class="chat-trade-label">Vuole:</span> ' + want + '</div>' +
         '<div class="chat-trade-row"><span class="chat-trade-label">Offre:</span> ' + offer + '</div>' +
-        '<div class="chat-trade-status">' + (status === "accepted" ? "Accettato" : status === "declined" ? "Rifiutato" : "In attesa") + '</div>';
+        '<div class="chat-trade-status">' + (status === "accepted" ? "Accettato" : status === "declined" ? "Rifiutato" : status === "expired" ? "Scaduto" : "In attesa") + '</div>';
       if (status === "pending" && trade) {
         if (isRecipient) {
           html += '<div class="trade-actions-inline"><button type="button" data-action="accept-trade" data-id="' + escapeHtml(trade.id) + '" class="btn-primary btn-sm">' + icon("check") + ' Accetta</button>' +
@@ -1418,6 +1517,9 @@
         } else if (isSender) {
           html += '<div class="trade-actions-inline"><button type="button" data-action="cancel-outgoing-trade" data-id="' + escapeHtml(trade.id) + '" class="btn-ghost btn-sm">' + icon("x") + ' Annulla</button></div>';
         }
+      } else if (status === "expired" && trade && isSender) {
+        /* la proposta e' scaduta e non puo' piu' essere accettata: chi l'ha inviata puo' comunque annullarla per pulizia */
+        html += '<div class="trade-actions-inline"><button type="button" data-action="cancel-outgoing-trade" data-id="' + escapeHtml(trade.id) + '" class="btn-ghost btn-sm">' + icon("x") + ' Annulla</button></div>';
       }
       html += '</div>';
       return html;
@@ -1445,6 +1547,9 @@
       html += '<div class="empty-state"><p>Nessun messaggio ancora. Scrivi il primo!</p></div>';
     } else {
       html += state.chatMessages.map(function (m) {
+        /* i messaggi di sistema (esito di uno scambio) sono centrati e senza mittente/orario,
+           per distinguerli chiaramente dai normali messaggi di testo */
+        if (m.type === "system") { return '<div class="chat-system-row">' + renderChatMessageContent(m) + '</div>'; }
         var own = sameUser(m.from, state.currentUser);
         var showSender = isGroup && !own;
         return '<div class="chat-bubble-row ' + (own ? "own" : "") + '"><div class="chat-bubble ' + ((m.type === "image" || m.type === "video") ? "chat-bubble-has-media" : "") + '">' +
@@ -1542,6 +1647,7 @@
         return renderTradeItemCard(item, sel, "toggle-offer", true);
       }).join("") +
       '</div></div></div>' +
+      renderTradeDurationField() +
       '</div>' +
       '<div class="modal-footer"><div class="trade-actions"><button type="button" data-action="close-chat-trade" class="btn-ghost">Annulla</button><button type="button" data-action="submit-chat-trade" class="btn-primary">Invia Proposta</button></div></div>' +
       '</div>';
@@ -1555,6 +1661,18 @@
       '<button type="button" data-action="history-filter" data-filter="declined" class="' + (state.historyFilter === "declined" ? "active" : "") + '">Rifiutati</button>' +
       '</div></div>';
     html += '<div class="search-box-wrap"><input type="text" id="history-search" placeholder="Cerca..." value="' + escapeHtml(state.historySearch) + '"/>' + (state.historySearch ? '<button type="button" data-action="clear-search" data-target="history" class="btn-clear">' + icon("x") + '</button>' : '') + '</div>';
+    /* filtro per utente (l'altra persona coinvolta nello scambio) e per intervallo di date */
+    var counterparts = historyCounterparts();
+    var filtersActive = !!(state.historyUserFilter || state.historyDateFrom || state.historyDateTo);
+    html += '<div class="history-adv-filters">' +
+      '<div class="field"><label>Utente</label><select id="history-user-filter">' +
+      '<option value="">Tutti</option>' +
+      counterparts.map(function (u) { return '<option value="' + escapeHtml(u) + '"' + (sameUser(state.historyUserFilter, u) ? " selected" : "") + '>' + escapeHtml(u) + '</option>'; }).join("") +
+      '</select></div>' +
+      '<div class="field"><label>Da</label><input type="date" id="history-date-from" value="' + escapeHtml(state.historyDateFrom || "") + '"/></div>' +
+      '<div class="field"><label>A</label><input type="date" id="history-date-to" value="' + escapeHtml(state.historyDateTo || "") + '"/></div>' +
+      (filtersActive ? '<button type="button" data-action="clear-search" data-target="historyFilters" class="btn-ghost btn-sm history-adv-clear">' + icon("x") + ' Cancella filtri</button>' : '') +
+      '</div>';
     if (state.history.length === 0) { html += '<div class="empty-state"><p>Nessuno scambio ancora.</p></div>'; }
     else {
       var visible = state.history.slice(0, state.historyLimit);
@@ -1564,9 +1682,12 @@
         var isSender = sameUser(fromU, state.currentUser);
         var isRecipient = sameUser(toU, state.currentUser);
         var other = escapeHtml(isSender ? toU : fromU);
-        return '<div class="trade-card ' + (t.accepted ? "accepted" : t.declined ? "declined" : "pending") + '">' +
+        var expired = isTradeExpired(t);
+        var statusClass = t.accepted ? "accepted" : t.declined ? "declined" : expired ? "expired" : "pending";
+        var statusLabel = t.accepted ? "Accettato" : t.declined ? "Rifiutato" : expired ? "Scaduto" : "In attesa";
+        return '<div class="trade-card ' + statusClass + '">' +
           '<div class="trade-header"><span>' + (isSender ? "A: " : "Da: ") + other + '</span>' +
-          '<span class="trade-status">' + (t.accepted ? "Accettato" : t.declined ? "Rifiutato" : "In attesa") + '</span></div>' +
+          '<span class="trade-status">' + statusLabel + '</span></div>' +
           ((t.wantNames && t.wantNames.length) || (t.offerNames && t.offerNames.length)
             ? '<div class="chat-trade-row"><span class="chat-trade-label">' + (isSender ? "Volevi:" : "Vuole:") + '</span> ' + (t.wantNames || []).map(escapeHtml).join(", ") + '</div>' +
               '<div class="chat-trade-row"><span class="chat-trade-label">' + (isSender ? "Offrivi:" : "Offre:") + '</span> ' + (t.offerNames || []).map(escapeHtml).join(", ") + '</div>'
@@ -1576,8 +1697,10 @@
               (isSender
                 ? '<button type="button" data-action="cancel-outgoing-trade" data-id="' + escapeHtml(t.id) + '" class="btn-ghost">' + icon("x") + ' Annulla</button>'
                 : isRecipient
-                  ? '<button type="button" data-action="accept-trade" data-id="' + escapeHtml(t.id) + '" class="btn-primary btn-sm">' + icon("check") + ' Accetta</button>' +
-                    '<button type="button" data-action="decline-trade" data-id="' + escapeHtml(t.id) + '" class="btn-ghost btn-sm">' + icon("x") + ' Rifiuta</button>'
+                  ? (expired
+                      ? '<span class="pill-muted">Proposta scaduta</span>'
+                      : '<button type="button" data-action="accept-trade" data-id="' + escapeHtml(t.id) + '" class="btn-primary btn-sm">' + icon("check") + ' Accetta</button>' +
+                        '<button type="button" data-action="decline-trade" data-id="' + escapeHtml(t.id) + '" class="btn-ghost btn-sm">' + icon("x") + ' Rifiuta</button>')
                   : '') +
               '</div>'
             : '') +
@@ -1707,9 +1830,24 @@
     }
     /* la barra delle tab (.tab-nav) scorre in orizzontale su schermi stretti: senza
        questo, cliccare una tab la ricreava sempre scrollata all'inizio, "nascondendo"
-       la tab appena selezionata se non era la prima */
+       la tab appena selezionata se non era la prima.
+       Prima si usava activeTabBtn.scrollIntoView({block:"nearest", inline:"nearest"}):
+       "block" riguarda pero' lo scroll VERTICALE, e siccome .app-header e' position:sticky
+       il browser calcola la sua posizione "di flusso" (come se non fosse sticky) per capire
+       se serve scrollare, e quella posizione risulta sempre in cima alla pagina. Il risultato
+       era che OGNI render() (non solo il cambio tab: anche aprire un modale sopra la chat,
+       es. "Scambio") faceva scattare la pagina/la chat in cima. Scrollando qui SOLO in
+       orizzontale il contenitore .tab-nav stesso, il resto della pagina non viene mai toccato. */
     var activeTabBtn = document.querySelector(".tab-nav button.active");
-    if (activeTabBtn && activeTabBtn.scrollIntoView) { activeTabBtn.scrollIntoView({ block: "nearest", inline: "nearest" }); }
+    if (activeTabBtn) {
+      var tabNavEl = activeTabBtn.parentElement;
+      if (tabNavEl) {
+        var btnLeft = activeTabBtn.offsetLeft, btnRight = btnLeft + activeTabBtn.offsetWidth;
+        var visibleLeft = tabNavEl.scrollLeft, visibleRight = visibleLeft + tabNavEl.clientWidth;
+        if (btnLeft < visibleLeft) tabNavEl.scrollLeft = btnLeft;
+        else if (btnRight > visibleRight) tabNavEl.scrollLeft = btnRight - tabNavEl.clientWidth;
+      }
+    }
   }
 
   /* ============ gestione eventi (delegazione) ============ */
@@ -1770,8 +1908,8 @@
     else if (action === "cancel-chat-media") { cancelChatMedia(); }
     else if (action === "go-profile") { goToOwnInventory(); }
     else if (action === "install-app") { promptInstall(); }
-    else if (action === "open-trade-builder") { state.showTradeBuilder = true; render(); }
-    else if (action === "cancel-trade-builder") { state.showTradeBuilder = false; state.wantIds = []; state.offerIds = []; render(); }
+    else if (action === "open-trade-builder") { state.showTradeBuilder = true; state.tradeDuration = ""; render(); }
+    else if (action === "cancel-trade-builder") { state.showTradeBuilder = false; state.wantIds = []; state.offerIds = []; state.tradeDuration = ""; render(); }
     else if (action === "toggle-want") { toggleWant(t.dataset.id); }
     else if (action === "toggle-offer") { toggleOffer(t.dataset.id); }
     else if (action === "submit-trade") { submitTrade(); }
@@ -1802,6 +1940,10 @@
     else if (e.target && e.target.id === "photo-input-edit") handleFileChange(e);
     else if (e.target && e.target.id === "chat-media-input") handleChatMediaChange(e);
     else if (e.target && e.target.type === "checkbox" && e.target.closest(".avail-toggle")) toggleAvailable(e.target.dataset.id);
+    else if (e.target && e.target.id === "history-user-filter") { state.historyUserFilter = e.target.value; state.historyLimit = HISTORY_PAGE; updateHistory(); }
+    else if (e.target && e.target.id === "history-date-from") { state.historyDateFrom = e.target.value; state.historyLimit = HISTORY_PAGE; updateHistory(); }
+    else if (e.target && e.target.id === "history-date-to") { state.historyDateTo = e.target.value; state.historyLimit = HISTORY_PAGE; updateHistory(); }
+    else if (e.target && e.target.id === "trade-duration") state.tradeDuration = e.target.value;
   });
 
   document.addEventListener("input", function (e) {
@@ -1937,7 +2079,11 @@
           otherUserSearch: "",
           pendingChatMedia: null,
           chatMediaSending: false,
-          showDeleteAccountConfirm: false
+          showDeleteAccountConfirm: false,
+          tradeDuration: "",
+          historyUserFilter: "",
+          historyDateFrom: "",
+          historyDateTo: ""
         });
         render();
         return;
