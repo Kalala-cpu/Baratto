@@ -252,6 +252,7 @@ input { font-family: inherit; }
   justify-content: center;
   width: 2rem;
   height: 2rem;
+  flex-shrink: 0;
   border: 1px solid var(--line);
   background: var(--cream);
   color: var(--ink);
@@ -454,7 +455,7 @@ input { font-family: inherit; }
   justify-content: space-between;
   gap: 0.4rem;
 }
-.item-header h3 { font-size: 0.95rem; font-weight: 700; line-height: 1.3; }
+.item-header h3 { font-size: 0.95rem; font-weight: 700; line-height: 1.3; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .item-user { font-size: 0.76rem; color: var(--brass); font-weight: 600; white-space: nowrap; }
 
 .item-actions { display: flex; gap: 0.15rem; flex-shrink: 0; }
