@@ -342,7 +342,20 @@
       render();
     });
   }
-  function loadTrades() { dbGet("trades").then(function (trades) { var all = toArray(trades); setState({ allTrades: all, history: all }); updateHistory(); }); }
+  /* carica solo gli scambi che coinvolgono l'utente corrente (come mittente o destinatario):
+     senza questo filtro la tab Scambi mostrava le proposte di TUTTI gli utenti, e chiunque
+     poteva finire per accettare/rifiutare scambi non propri */
+  function loadTrades() {
+    dbGet("trades").then(function (trades) {
+      var all = toArray(trades).filter(function (t) {
+        var fromU = t.fromUser || t.from || "";
+        var toU = t.toUser || t.to || "";
+        return sameUser(fromU, state.currentUser) || sameUser(toU, state.currentUser);
+      });
+      setState({ allTrades: all, history: all });
+      updateHistory();
+    });
+  }
   /* carica sia gli amici confermati (users/{u}/friends) sia le richieste pendenti
      (friendRequests), in entrata e in uscita, cosi' la tab Amici puo' mostrarle tutte */
   function loadFriends() {
@@ -781,10 +794,19 @@
   function namesForIds(ids, arr) {
     return ids.map(function (id) { var it = getItemById(id, arr); return it ? it.name : "?"; });
   }
+  /* verifica che tutti gli id selezionati corrispondano ancora a oggetti esistenti e disponibili
+     (un oggetto puo' essere stato reso non disponibile o eliminato tra la selezione e l'invio) */
+  function idsStillAvailable(ids, arr) {
+    return ids.every(function (id) { var it = getItemById(id, arr); return it && isAvailable(it); });
+  }
 
   function submitTrade() {
     if (!state.selectedUser) return;
     if (!state.wantIds.length || !state.offerIds.length) { setMessage("Seleziona cosa vuoi e cosa offri.", "error"); return; }
+    if (!idsStillAvailable(state.wantIds, state.otherUserInventory) || !idsStillAvailable(state.offerIds, state.inventory)) {
+      setMessage("Alcuni oggetti selezionati non sono più disponibili. Aggiorna la selezione.", "error");
+      return;
+    }
     var trade = {
       id: genId(),
       from: state.currentUser,
@@ -818,6 +840,10 @@
   function submitChatTrade() {
     if (!state.chatTarget || state.chatTarget.type !== "friend") return;
     if (!state.wantIds.length || !state.offerIds.length) { setMessage("Seleziona cosa vuoi e cosa offri.", "error"); return; }
+    if (!idsStillAvailable(state.wantIds, state.chatOtherInventory) || !idsStillAvailable(state.offerIds, state.inventory)) {
+      setMessage("Alcuni oggetti selezionati non sono più disponibili. Aggiorna la selezione.", "error");
+      return;
+    }
     var wantNames = namesForIds(state.wantIds, state.chatOtherInventory);
     var offerNames = namesForIds(state.offerIds, state.inventory);
     var trade = {
@@ -1065,7 +1091,7 @@
         '</div></div>' +
         '<div class="trade-divider">' + icon("swap") + '</div>' +
         '<div class="trade-section"><h3>Offro</h3><div class="items-list">' +
-        state.inventory.map(function (item) {
+        state.inventory.filter(isAvailable).map(function (item) {
           var sel = state.offerIds.indexOf(item.id) !== -1;
           return '<div class="trade-item ' + (sel ? "selected" : "") + '" data-action="toggle-offer" data-id="' + escapeHtml(item.id) + '">' + escapeHtml(item.name) + (sel ? ' ' + icon("check") : "") + '</div>';
         }).join("") +
@@ -1227,7 +1253,7 @@
       '</div></div>' +
       '<div class="trade-divider">' + icon("swap") + '</div>' +
       '<div class="trade-section"><h3>Offro</h3><div class="items-list">' +
-      state.inventory.map(function (item) {
+      state.inventory.filter(isAvailable).map(function (item) {
         var sel = state.offerIds.indexOf(item.id) !== -1;
         return '<div class="trade-item ' + (sel ? "selected" : "") + '" data-action="toggle-offer" data-id="' + escapeHtml(item.id) + '">' + escapeHtml(item.name) + (sel ? ' ' + icon("check") : "") + '</div>';
       }).join("") +
@@ -1252,6 +1278,7 @@
         var fromU = t.fromUser || t.from || "";
         var toU = t.toUser || t.to || "";
         var isSender = sameUser(fromU, state.currentUser);
+        var isRecipient = sameUser(toU, state.currentUser);
         var other = escapeHtml(isSender ? toU : fromU);
         return '<div class="trade-card ' + (t.accepted ? "accepted" : t.declined ? "declined" : "pending") + '">' +
           '<div class="trade-header"><span>' + (isSender ? "A: " : "Da: ") + other + '</span>' +
@@ -1264,8 +1291,10 @@
             ? '<div class="trade-actions-inline">' +
               (isSender
                 ? '<button type="button" data-action="cancel-outgoing-trade" data-id="' + escapeHtml(t.id) + '" class="btn-ghost">' + icon("x") + ' Annulla</button>'
-                : '<button type="button" data-action="accept-trade" data-id="' + escapeHtml(t.id) + '" class="btn-primary btn-sm">' + icon("check") + ' Accetta</button>' +
-                  '<button type="button" data-action="decline-trade" data-id="' + escapeHtml(t.id) + '" class="btn-ghost btn-sm">' + icon("x") + ' Rifiuta</button>') +
+                : isRecipient
+                  ? '<button type="button" data-action="accept-trade" data-id="' + escapeHtml(t.id) + '" class="btn-primary btn-sm">' + icon("check") + ' Accetta</button>' +
+                    '<button type="button" data-action="decline-trade" data-id="' + escapeHtml(t.id) + '" class="btn-ghost btn-sm">' + icon("x") + ' Rifiuta</button>'
+                  : '') +
               '</div>'
             : '') +
           '</div>';
