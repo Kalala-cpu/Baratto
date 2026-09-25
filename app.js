@@ -394,15 +394,42 @@
   }
 
   /* ============ auth ============ */
+  /* email "finta" usata per gli account creati senza una vera email:
+     Firebase Auth richiede comunque un'email per il metodo password,
+     quindi ne generiamo una interna, mai mostrata all'utente */
+  function syntheticEmail() { return "u" + genId() + "@baratto.local"; }
+  function isSyntheticEmail(email) { return !!email && /@baratto\.local$/.test(email); }
+
   function handleAuthSubmit(e) {
     e.preventDefault();
-    var email = state.authEmail.trim();
-    if (!email) { setState({ authError: "Inserisci email." }); render(); return; }
+    if (state.authMode === "noEmail") {
+      var pwNoEmail = state.authPassword || "";
+      if (pwNoEmail.length < 6) { setState({ authError: "Password troppo corta." }); render(); return; }
+      fbAuth.createUserWithEmailAndPassword(syntheticEmail(), pwNoEmail).catch(function (err) { setState({ authError: authErrorMessage(err) }); render(); });
+      return;
+    }
+    var input = state.authEmail.trim();
+    if (!input) { setState({ authError: state.authMode === "login" ? "Inserisci email o nome utente." : "Inserisci email." }); render(); return; }
     if (state.authMode === "login" || state.authMode === "register") {
       var pw = state.authPassword || "";
       if (pw.length < 6) { setState({ authError: "Password troppo corta." }); render(); return; }
-      var fn = state.authMode === "login" ? fbAuth.signInWithEmailAndPassword : fbAuth.createUserWithEmailAndPassword;
-      fn.call(fbAuth, email, pw).catch(function (err) { setState({ authError: authErrorMessage(err) }); render(); });
+      if (state.authMode === "register") {
+        fbAuth.createUserWithEmailAndPassword(input, pw).catch(function (err) { setState({ authError: authErrorMessage(err) }); render(); });
+        return;
+      }
+      /* login: se non contiene "@" trattalo come nome utente e recupera l'email interna associata */
+      var emailPromise = input.indexOf("@") === -1
+        ? dbGet("loginEmails/" + input.toLowerCase()).then(function (rec) {
+            if (!rec || !rec.email) { var e2 = new Error("Nome utente non trovato."); e2.code = ""; throw e2; }
+            return rec.email;
+          })
+        : Promise.resolve(input);
+      emailPromise.then(function (resolvedEmail) {
+        return fbAuth.signInWithEmailAndPassword(resolvedEmail, pw);
+      }).catch(function (err) {
+        setState({ authError: err.code ? authErrorMessage(err) : err.message });
+        render();
+      });
     }
   }
   function handleGoogle() {
@@ -462,6 +489,41 @@
     });
   }
 
+  /* ============ eliminazione account ============ */
+  function deleteAccount() {
+    if (!confirm("Eliminare definitivamente il tuo account? L'azione non può essere annullata.")) return;
+    performAccountDeletion(false);
+  }
+  function performAccountDeletion(isRetry) {
+    var fbUser = fbAuth.currentUser;
+    if (!fbUser) return;
+    var uLower = state.currentUser.toLowerCase();
+    var uid = fbUser.uid;
+    Promise.all([
+      fbDb.ref("usernames/" + uLower).remove(),
+      fbDb.ref("profiles/" + uid).remove(),
+      fbDb.ref("inventories/" + uLower).remove(),
+      fbDb.ref("users/" + uLower + "/friends").remove(),
+      fbDb.ref("loginEmails/" + uLower).remove()
+    ]).then(function () {
+      return fbUser.delete();
+    }).then(function () {
+      alert("Account eliminato con successo.");
+    }).catch(function (err) {
+      /* Firebase richiede un login recente per operazioni sensibili come l'eliminazione dell'account */
+      if (err && err.code === "auth/requires-recent-login" && !isRetry && fbUser.email) {
+        var pw = window.prompt("Per motivi di sicurezza, reinserisci la password per confermare l'eliminazione:");
+        if (!pw) return;
+        var cred = firebase.auth.EmailAuthProvider.credential(fbUser.email, pw);
+        fbUser.reauthenticateWithCredential(cred).then(function () {
+          performAccountDeletion(true);
+        }).catch(function (err2) { setMessage(authErrorMessage(err2), "error"); });
+        return;
+      }
+      setMessage(dbErrorMessage(err, "Errore: " + err.message), "error");
+    });
+  }
+
   function sendEmailLink(email) {
     fbAuth.sendSignInLinkToEmail(email, { url: window.location.href, handleCodeInApp: true }).then(function () {
       window.localStorage.setItem("emailForSignIn", email);
@@ -505,6 +567,9 @@
       var fbUser = fbAuth.currentUser;
       return dbSet("usernames/" + uLower, { uid: fbUser.uid, username: u }).then(function () {
         return dbSet("profiles/" + fbUser.uid, { username: u });
+      }).then(function () {
+        /* account senza email vera: memorizza l'email interna cosi' il login futuro puo' avvenire con il solo nome utente */
+        if (isSyntheticEmail(fbUser.email)) return dbSet("loginEmails/" + uLower, { email: fbUser.email });
       }).then(function () {
         setState({ currentUser: u, needUsername: false });
         loadInventory();
@@ -556,6 +621,12 @@
       if (idx >= 0) arr.splice(idx, 1);
       return dbSet("users/" + u + "/friends", arr);
     }).then(function () { setMessage("Amico rimosso.", "success"); loadFriends(); }).catch(function (err) { setMessage("Errore: " + err.message, "error"); });
+  }
+
+  /* stato amicizia con un utente: "accepted" | "outgoing" | "pending" | null */
+  function friendStatusFor(username) {
+    var f = (state.friends || []).filter(function (x) { return x && sameUser(x.username, username); })[0];
+    return f ? f.status : null;
   }
 
   function openUser(username) { setState({ selectedUser: username, otherUserInventory: [], tab: "community" }); getInventory(username.toLowerCase()).then(function (inv) { setState({ otherUserInventory: inv }); render(); }); render(); }
@@ -953,7 +1024,19 @@
   }
 
   function renderOtherUserView() {
-    var html = '<div class="page-header"><button type="button" data-action="back-to-community" class="btn-icon-left">' + icon("chevron-left") + ' Indietro</button><h2>' + escapeHtml(state.selectedUser) + '</h2></div>';
+    var fStatus = friendStatusFor(state.selectedUser);
+    var friendBtnHtml;
+    if (fStatus === "accepted") {
+      friendBtnHtml = '<span class="pill-muted">' + icon("user-check") + ' Amico</span>';
+    } else if (fStatus === "outgoing") {
+      friendBtnHtml = '<span class="pill-muted">Richiesta inviata</span>';
+    } else if (fStatus === "pending") {
+      var reqId = ((state.friends || []).filter(function (x) { return x && sameUser(x.username, state.selectedUser) && x.status === "pending"; })[0] || {}).id;
+      friendBtnHtml = '<button type="button" data-action="accept-friend" data-id="' + escapeHtml(reqId || "") + '" class="btn-primary btn-sm">' + icon("user-check") + ' Accetta richiesta</button>';
+    } else {
+      friendBtnHtml = '<button type="button" data-action="add-friend" data-username="' + escapeHtml(state.selectedUser) + '" class="btn-ghost btn-sm">' + icon("user-plus") + ' Aggiungi amico</button>';
+    }
+    var html = '<div class="page-header"><button type="button" data-action="back-to-community" class="btn-icon-left">' + icon("chevron-left") + ' Indietro</button><h2>' + escapeHtml(state.selectedUser) + '</h2>' + friendBtnHtml + '</div>';
     if (state.otherUserInventory.length === 0) {
       html += '<div class="empty-state"><p>Nessun oggetto disponibile.</p></div>';
     } else {
@@ -1196,14 +1279,18 @@
     if (state.needUsername) {
       return '<div class="auth-wrap"><div class="auth-box"><div class="auth-header"><h1 class="display">Baratto</h1></div><div class="auth-panel"><p style="margin-bottom:1rem;">Scegli un nome utente:</p><form id="username-form"><div class="field"><input id="new-username" type="text" placeholder="3-20 caratteri, lettere/numeri/_" maxlength="20" value="' + escapeHtml(state.usernameInput) + '"/></div>' + (state.authError ? '<div class="banner error">' + icon("alert-circle") + '<span>' + escapeHtml(state.authError) + '</span></div>' : '') + '<button type="submit" class="btn-primary block">Continua</button></form></div></div></div>';
     }
-    var segHtml = '<div class="seg"><button type="button" data-action="show-login" class="' + (state.authMode === "login" ? "active" : "") + '">Accedi</button><button type="button" data-action="show-register" class="' + (state.authMode === "register" ? "active" : "") + '">Registrati</button><button type="button" data-action="show-link" class="' + (state.authMode === "link" ? "active" : "") + '">Link Email</button></div>';
+    var segHtml = '<div class="seg"><button type="button" data-action="show-login" class="' + (state.authMode === "login" ? "active" : "") + '">Accedi</button><button type="button" data-action="show-register" class="' + (state.authMode === "register" ? "active" : "") + '">Registrati</button><button type="button" data-action="show-noemail" class="' + (state.authMode === "noEmail" ? "active" : "") + '">Senza email</button><button type="button" data-action="show-link" class="' + (state.authMode === "link" ? "active" : "") + '">Link Email</button></div>';
     var formHtml = '';
     if (state.linkSentTo) {
       formHtml = '<div class="banner success">' + icon("check") + '<span>Link inviato a ' + escapeHtml(state.linkSentTo) + '. Controlla la posta.</span></div><button type="button" data-action="link-again" class="auth-link-btn">Invia un altro link</button>';
     } else if (state.authMode === "link") {
       formHtml = '<form id="auth-form"><div class="field"><label>Email</label><div class="field-icon-wrap"><input id="auth-email" type="email" placeholder="tua@email.com" value="' + escapeHtml(state.authEmail) + '"/><span class="icon">' + icon("mail") + '</span></div></div>' + (state.authError ? '<div class="banner error">' + icon("alert-circle") + '<span>' + escapeHtml(state.authError) + '</span></div>' : '') + '<button type="submit" class="btn-primary block">Invia Link</button></form>';
+    } else if (state.authMode === "noEmail") {
+      formHtml = '<form id="auth-form"><p class="chat-sub" style="margin-bottom:1rem;">Crea un account con la sola password: niente email. Dopo la registrazione sceglierai un nome utente che userai anche per accedere in seguito.</p><div class="field"><label>Password</label><div class="field-icon-wrap"><input id="auth-password" type="password" placeholder="Almeno 6 caratteri"/><span class="icon">' + icon("lock") + '</span></div></div>' + (state.authError ? '<div class="banner error">' + icon("alert-circle") + '<span>' + escapeHtml(state.authError) + '</span></div>' : '') + '<button type="submit" class="btn-primary block">Crea account</button></form>';
     } else {
-      formHtml = '<form id="auth-form"><div class="field"><label>Email</label><div class="field-icon-wrap"><input id="auth-email" type="email" placeholder="tua@email.com" value="' + escapeHtml(state.authEmail) + '"/><span class="icon">' + icon("mail") + '</span></div></div><div class="field"><label>Password</label><div class="field-icon-wrap"><input id="auth-password" type="password" placeholder="Almeno 6 caratteri"/><span class="icon">' + icon("lock") + '</span></div></div>' + (state.authError ? '<div class="banner error">' + icon("alert-circle") + '<span>' + escapeHtml(state.authError) + '</span></div>' : '') + '<button type="submit" class="btn-primary block">' + (state.authMode === "login" ? "Accedi" : "Registrati") + '</button></form><div class="auth-divider">oppure</div><button type="button" data-action="google-login" class="btn-google"><svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="currentColor"/><path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="currentColor"/><path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="currentColor"/><path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="currentColor"/></svg>Google</button>';
+      var idLabel = state.authMode === "login" ? "Email o nome utente" : "Email";
+      var idPlaceholder = state.authMode === "login" ? "tua@email.com o nome utente" : "tua@email.com";
+      formHtml = '<form id="auth-form"><div class="field"><label>' + idLabel + '</label><div class="field-icon-wrap"><input id="auth-email" type="text" placeholder="' + idPlaceholder + '" value="' + escapeHtml(state.authEmail) + '"/><span class="icon">' + icon("mail") + '</span></div></div><div class="field"><label>Password</label><div class="field-icon-wrap"><input id="auth-password" type="password" placeholder="Almeno 6 caratteri"/><span class="icon">' + icon("lock") + '</span></div></div>' + (state.authError ? '<div class="banner error">' + icon("alert-circle") + '<span>' + escapeHtml(state.authError) + '</span></div>' : '') + '<button type="submit" class="btn-primary block">' + (state.authMode === "login" ? "Accedi" : "Registrati") + '</button></form><div class="auth-divider">oppure</div><button type="button" data-action="google-login" class="btn-google"><svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="currentColor"/><path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="currentColor"/><path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="currentColor"/><path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="currentColor"/></svg>Google</button>';
     }
     return '<div class="auth-wrap"><div class="auth-box"><div class="auth-header"><h1 class="display">Baratto</h1><div class="ornament"><div class="line"></div><div class="dot"></div><div class="line"></div></div><p>Scambia oggetti con la comunità</p></div><div class="auth-panel">' + segHtml + formHtml + '</div><div class="auth-footnote">Creando un account accetti i nostri <a href="#" style="color:var(--brass);">Termini di Servizio</a></div></div></div>';
   }
@@ -1224,6 +1311,7 @@
     return '' +
       '<header class="app-header"><div class="row"><span class="wordmark display">Baratto</span>' +
         '<div class="header-right"><span class="greet">Ciao, <strong>' + escapeHtml(state.currentUser) + '</strong></span>' +
+        '<button data-action="delete-account" class="btn-ghost" title="Elimina account">' + icon("trash") + '</button>' +
         '<button data-action="logout" class="btn-ghost">' + icon("logout") + " Esci</button></div></div>" +
         '<div class="tab-nav">' + tabsHtml + "</div></header>" +
       (state.message ? '<div class="message-wrap"><div class="banner ' + state.message.type + '">' +
@@ -1268,9 +1356,11 @@
     if (action === "show-login") { state.authMode = "login"; state.authError = ""; render(); }
     else if (action === "show-register") { state.authMode = "register"; state.authError = ""; render(); }
     else if (action === "show-link") { state.authMode = "link"; state.authError = ""; state.linkSentTo = null; render(); }
+    else if (action === "show-noemail") { state.authMode = "noEmail"; state.authError = ""; render(); }
     else if (action === "link-again") { state.linkSentTo = null; render(); }
     else if (action === "google-login") { handleGoogle(); }
     else if (action === "logout") { handleLogout(); }
+    else if (action === "delete-account") { deleteAccount(); }
     else if (action === "switch-tab") { switchTab(t.dataset.tab); }
     else if (action === "open-add-item") { openAddItem(); }
     else if (action === "close-add-item") { state.showAddItem = false; render(); }
