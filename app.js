@@ -324,6 +324,30 @@
     }).catch(function (err) { setMessage("Errore: " + err.message, "error"); });
   }
 
+  /* ============ riordino oggetti inventario ============
+     Sposta un oggetto di una posizione (dir -1 = prima, +1 = dopo). L'ordine locale
+     cambia subito per reattivita', poi la stessa coppia di oggetti (identificati per id,
+     non per indice) viene scambiata anche lato server dentro una transazione, cosi' un
+     eventuale altro salvataggio concorrente (es. un'altra scheda aperta) non viene
+     sovrascritto ne' spezza l'ordine. */
+  function moveInventoryItem(itemId, dir) {
+    var inv = state.inventory;
+    var idx = findItemIndexById(itemId, inv);
+    var targetIdx = idx + dir;
+    if (idx < 0 || targetIdx < 0 || targetIdx >= inv.length) return;
+    var targetId = inv[targetIdx].id;
+    var tmp = inv[idx]; inv[idx] = inv[targetIdx]; inv[targetIdx] = tmp;
+    render();
+    updateInventory(state.currentUser.toLowerCase(), function (serverInv) {
+      var i1 = findItemIndexById(itemId, serverInv), i2 = findItemIndexById(targetId, serverInv);
+      if (i1 >= 0 && i2 >= 0) { var t = serverInv[i1]; serverInv[i1] = serverInv[i2]; serverInv[i2] = t; }
+      return serverInv;
+    }).then(function () { loadInventory(); }).catch(function (err) {
+      setMessage("Errore: " + err.message, "error");
+      loadInventory();
+    });
+  }
+
   /* ============ delete item ============ */
   function deleteItem(id) {
     if (!confirm("Eliminare questo oggetto?")) return;
@@ -1352,8 +1376,18 @@
       '</select></div>';
   }
 
-  function renderInventoryItem(item, isOwn) {
+  /* id del primo oggetto DISPONIBILE nell'inventario: e' la sua foto ad essere usata come
+     "immagine profilo" dell'utente ovunque nella community (vedi loadCommunity: firstItem
+     e' items[0] dopo aver filtrato per isAvailable). Riordinare gli oggetti (o cambiarne
+     la disponibilita') cambia quindi anche l'immagine profilo mostrata agli altri. */
+  function firstAvailableItemId(inv) {
+    var found = (inv || []).filter(isAvailable)[0];
+    return found ? found.id : null;
+  }
+
+  function renderInventoryItem(item, isOwn, reorder) {
     var av = isAvailable(item), photos = itemPhotos(item);
+    var isProfile = isOwn && reorder && reorder.profileId === item.id;
     var html = '<div class="item-card ' + (av ? "" : "unavailable") + '">';
     if (photos.length) {
       var firstPhoto = photos[0];
@@ -1361,6 +1395,7 @@
       var firstIsVideo = isVideo(firstPhoto);
       html += '<div class="item-photo" data-action="view-photos" data-id="' + escapeHtml(item.id) + '" data-source="' + (isOwn ? "own" : "other") + '">' +
         (photos.length > 1 ? '<div class="photo-badge">' + photos.length + '</div>' : '') +
+        (isProfile ? '<div class="item-profile-badge" title="Immagine profilo: e\' quella mostrata agli altri in Community">' + icon("star") + ' Profilo</div>' : '') +
         (firstIsVideo
           ? '<video src="' + escapeHtml(firstUrl) + '" class="item-thumb-video" muted playsinline preload="metadata"></video>'
           : '<img src="' + escapeHtml(firstUrl) + '" alt=""/>') +
@@ -1374,6 +1409,16 @@
         '</div>';
     }
     html += '</div>';
+    if (isOwn && reorder) {
+      /* riordino della posizione dell'oggetto nell'inventario: sposta anche la sua
+         eventuale posizione come "primo oggetto disponibile" (immagine profilo).
+         Nascosto durante una ricerca, perche' l'ordine visibile sarebbe solo un
+         sottoinsieme filtrato e non corrisponderebbe alle posizioni reali da scambiare. */
+      html += '<div class="item-reorder">' +
+        (reorder.idx > 0 ? '<button type="button" data-action="move-item-left" data-id="' + escapeHtml(item.id) + '" class="btn-move-item" title="Sposta prima">' + icon("chevron-left") + ' Prima</button>' : '<span></span>') +
+        (reorder.idx < reorder.total - 1 ? '<button type="button" data-action="move-item-right" data-id="' + escapeHtml(item.id) + '" class="btn-move-item" title="Sposta dopo">Dopo ' + icon("chevron-left", "icon-flip-h") + '</button>' : '<span></span>') +
+        '</div>';
+    }
     if (isOwn) {
       html += '<label class="avail-toggle"><input type="checkbox" data-id="' + escapeHtml(item.id) + '" ' + (av ? "checked" : "") + '><span>' + (av ? "Disponibile" : "Non disponibile") + '</span></label>';
     }
@@ -1389,7 +1434,13 @@
       html += '<div class="empty-state"><p>Nessun oggetto. Aggiungi il primo!</p></div>';
     } else {
       html += '<div class="search-box-wrap"><input type="text" id="inventory-search" placeholder="Cerca..." value="' + escapeHtml(state.inventorySearch) + '"/>' + (state.inventorySearch ? '<button type="button" data-action="clear-search" data-target="inventory" class="btn-clear">' + icon("x") + '</button>' : '') + '</div>';
-      html += '<div class="items-grid">' + filtered.map(function (item) { return renderInventoryItem(item, true); }).join("") + '</div>';
+      var canReorder = !search && state.inventory.length > 1;
+      var profileId = firstAvailableItemId(state.inventory);
+      if (canReorder) { html += '<p class="photos-hint">Usa "Prima"/"Dopo" per riordinare gli oggetti: il primo disponibile è quello usato come immagine profilo in Community.</p>'; }
+      html += '<div class="items-grid">' + filtered.map(function (item) {
+        var reorder = canReorder ? { idx: findItemIndexById(item.id, state.inventory), total: state.inventory.length, profileId: profileId } : null;
+        return renderInventoryItem(item, true, reorder);
+      }).join("") + '</div>';
       if (filtered.length === 0) { html += '<div class="empty-state"><p>Nessun risultato.</p></div>'; }
     }
     return html;
@@ -1936,6 +1987,8 @@
     else if (action === "move-edit-photo-left") { swapPhotos(state.editItemPhotos, parseInt(t.dataset.index, 10), -1); }
     else if (action === "move-edit-photo-right") { swapPhotos(state.editItemPhotos, parseInt(t.dataset.index, 10), 1); }
     else if (action === "delete-item") { deleteItem(t.dataset.id); }
+    else if (action === "move-item-left") { moveInventoryItem(t.dataset.id, -1); }
+    else if (action === "move-item-right") { moveInventoryItem(t.dataset.id, 1); }
     else if (action === "open-user") { openUser(t.dataset.username); }
     else if (action === "back-to-community") { backToCommunity(); }
     else if (action === "refresh-community") { loadCommunity(); }
