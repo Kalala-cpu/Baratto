@@ -174,6 +174,7 @@
     wantIds: [],
     offerIds: [],
     community: [],
+    communityUsers: [],
     communitySearch: "",
     selectedUser: null,
     otherUserInventory: [],
@@ -296,22 +297,35 @@
 
   /* ============ loads ============ */
   function loadInventory() { getInventory(state.currentUser.toLowerCase()).then(function (inv) { setState({ inventory: inv }); render(); }); }
-  /* "inventories" e' un oggetto {usernameLower: [item, item, ...]}: qui lo appiattiamo
-     in un'unica lista di oggetti disponibili, ciascuno con il proprietario ("user") allegato */
+  /* Carica TUTTI gli utenti registrati (da "usernames") e le loro inventory.
+     Ogni utente compare nella community anche se ha 0 oggetti. */
   function loadCommunity() {
-    dbGet("inventories").then(function (invs) {
-      invs = invs || {};
-      var all = [];
-      Object.keys(invs).forEach(function (uLower) {
+    Promise.all([
+      dbGet("usernames"),
+      dbGet("inventories")
+    ]).then(function (results) {
+      var usernames = results[0] || {};
+      var invs = results[1] || {};
+      var users = [];
+      var allItems = [];
+      Object.keys(usernames).forEach(function (uLower) {
         if (sameUser(uLower, state.currentUser)) return;
-        toArray(invs[uLower]).forEach(function (item) {
-          if (!isAvailable(item)) return;
+        var record = usernames[uLower];
+        var displayName = (record && record.username) ? record.username : uLower;
+        var items = toArray(invs[uLower]).filter(isAvailable);
+        users.push({ username: displayName, uLower: uLower, itemCount: items.length, firstItem: items[0] || null });
+        items.forEach(function (item) {
           var copy = Object.assign({}, item);
           copy.user = uLower;
-          all.push(copy);
+          allItems.push(copy);
         });
       });
-      setState({ community: all });
+      /* utenti con oggetti prima, poi ordine alfabetico */
+      users.sort(function (a, b) {
+        if (b.itemCount !== a.itemCount) return b.itemCount - a.itemCount;
+        return a.uLower.localeCompare(b.uLower);
+      });
+      setState({ communityUsers: users, community: allItems });
       render();
     });
   }
@@ -397,6 +411,7 @@
         wantIds: [],
         offerIds: [],
         community: [],
+        communityUsers: [],
         communitySearch: "",
         selectedUser: null,
         otherUserInventory: [],
@@ -679,25 +694,37 @@
 
   function renderCommunityTab() {
     var search = (state.communitySearch || "").toLowerCase();
-    var filtered = state.community.filter(function (item) { return !search || item.name.toLowerCase().indexOf(search) !== -1; });
-    var html = '<div class="page-header"><h2>Community</h2></div>';
-    html += '<div class="search-box-wrap"><input type="text" id="community-search" placeholder="Cerca..." value="' + escapeHtml(state.communitySearch) + '"/>' + (state.communitySearch ? '<button type="button" data-action="clear-search" data-target="community" class="btn-clear">' + icon("x") + '</button>' : '') + '</div>';
-    if (state.community.length === 0) {
-      html += '<div class="empty-state"><p>Nessun oggetto disponibile al momento.</p></div>';
+    var users = state.communityUsers || [];
+    var filtered = users.filter(function (u) { return !search || u.username.toLowerCase().indexOf(search) !== -1; });
+    var html = '<div class="page-header"><h2>Community</h2>';
+    html += '<button type="button" data-action="refresh-community" class="btn-ghost">' + icon("refresh") + '</button></div>';
+    html += '<div class="search-box-wrap"><input type="text" id="community-search" placeholder="Cerca utente..." value="' + escapeHtml(state.communitySearch) + '"/>' + (state.communitySearch ? '<button type="button" data-action="clear-search" data-target="community" class="btn-clear">' + icon("x") + '</button>' : '') + '</div>';
+    if (users.length === 0) {
+      html += '<div class="empty-state"><p>Nessun altro utente registrato.</p></div>';
     } else {
-      html += '<div class="items-grid">' + filtered.map(function (item) {
-        var photos = itemPhotos(item);
-        var firstPhoto = photos[0];
-        var thumbHtml = photos.length
-          ? (isVideo(firstPhoto)
-              ? '<video src="' + escapeHtml(photoUrl(firstPhoto)) + '" class="item-thumb-video" muted playsinline preload="metadata"></video>'
-              : '<img src="' + escapeHtml(photoUrl(firstPhoto)) + '" alt=""/>')
-          : icon("package");
-        return '<div class="item-card" data-action="open-user" data-username="' + escapeHtml(item.user || "") + '">' +
-          '<div class="item-photo">' + thumbHtml + '</div>' +
-          '<div class="item-info"><div class="item-header"><h3>' + escapeHtml(item.name) + '</h3><span class="item-user">' + escapeHtml(item.user || "") + '</span></div></div></div>';
+      html += '<div class="community-users-grid">' + filtered.map(function (u) {
+        /* show a thumbnail from their first available item, if any */
+        var thumb = '';
+        if (u.firstItem) {
+          var photos = itemPhotos(u.firstItem);
+          if (photos.length) {
+            var fp = photos[0];
+            thumb = isVideo(fp)
+              ? '<video src="' + escapeHtml(photoUrl(fp)) + '" class="community-user-thumb-video" muted playsinline preload="metadata"></video>'
+              : '<img src="' + escapeHtml(photoUrl(fp)) + '" alt="" class="community-user-thumb-img"/>';
+          }
+        }
+        var avatarHtml = thumb
+          ? '<div class="community-user-avatar community-user-avatar--photo">' + thumb + '</div>'
+          : '<div class="community-user-avatar">' + icon("user") + '</div>';
+        var countLabel = u.itemCount === 0
+          ? '<span class="community-item-count zero">Nessun oggetto</span>'
+          : '<span class="community-item-count">' + u.itemCount + ' oggett' + (u.itemCount === 1 ? 'o' : 'i') + '</span>';
+        return '<div class="community-user-card" data-action="open-user" data-username="' + escapeHtml(u.username) + '">' +
+          avatarHtml +
+          '<div class="community-user-info"><strong class="community-user-name">' + escapeHtml(u.username) + '</strong>' + countLabel + '</div></div>';
       }).join("") + '</div>';
-      if (filtered.length === 0) { html += '<div class="empty-state"><p>Nessun risultato.</p></div>'; }
+      if (filtered.length === 0) { html += '<div class="empty-state"><p>Nessun utente trovato.</p></div>'; }
     }
     return html;
   }
@@ -979,6 +1006,7 @@
           wantIds: [],
           offerIds: [],
           community: [],
+          communityUsers: [],
           communitySearch: "",
           selectedUser: null,
           otherUserInventory: [],
