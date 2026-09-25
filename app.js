@@ -734,15 +734,21 @@
       if (el) el.scrollTop = el.scrollHeight;
     }, 0);
   }
+  /* invio dal modulo principale della chat: se c'e' un allegato in attesa di conferma,
+     lo stesso tasto di invio del messaggio spedisce quello (non serve piu' un tasto
+     separato); l'eventuale testo scritto insieme alla foto/video parte come didascalia,
+     subito dopo, sotto forma di messaggio di testo normale */
   function sendChatMessage(e) {
     e.preventDefault();
-    var text = (state.chatInput || "").trim();
     var path = chatMessagesPath();
-    if (!text || !path) return;
+    if (!path) return;
+    var text = (state.chatInput || "").trim();
     if (text.length > MAX_CHAT_MESSAGE_LEN) {
       setMessage("Messaggio troppo lungo (max " + MAX_CHAT_MESSAGE_LEN + " caratteri).", "error");
       return;
     }
+    if (state.pendingChatMedia) { confirmSendChatMedia(text); return; }
+    if (!text) return;
     var msgId = genId();
     var msg = { id: msgId, from: state.currentUser, type: "text", text: text, created: Date.now() };
     setState({ chatInput: "" });
@@ -772,18 +778,28 @@
     setState({ pendingChatMedia: null });
     render();
   }
-  /* invio effettivo dell'allegato, solo dopo conferma esplicita dell'utente */
-  function confirmSendChatMedia() {
+  /* invio effettivo dell'allegato: parte quando l'utente preme il tasto di invio
+     principale della chat (vedi sendChatMessage). followUpText e' l'eventuale testo
+     scritto insieme alla foto/video: viene inviato come messaggio a parte subito dopo,
+     cosi' funziona anche da didascalia senza dover cambiare il formato dei messaggi */
+  function confirmSendChatMedia(followUpText) {
     var pending = state.pendingChatMedia;
     var path = chatMessagesPath();
     if (!pending || !path || state.chatMediaSending) return;
     var file = pending.file, msgId = genId();
-    setState({ pendingChatMedia: null, chatMediaSending: true });
+    setState({ pendingChatMedia: null, chatMediaSending: true, chatInput: "" });
     render();
     var finish = function () {
       if (pending.previewUrl) URL.revokeObjectURL(pending.previewUrl);
       setState({ chatMediaSending: false });
       render();
+      if (followUpText) {
+        var textMsgId = genId();
+        var textMsg = { id: textMsgId, from: state.currentUser, type: "text", text: followUpText, created: Date.now() };
+        dbSet(path + "/" + textMsgId, textMsg).catch(function (err) {
+          setMessage(dbErrorMessage(err, "Errore invio: " + err.message), "error");
+        });
+      }
     };
     if (pending.type === "video") {
       var reader = new FileReader();
@@ -1426,10 +1442,9 @@
           ? '<video src="' + escapeHtml(pm.previewUrl) + '" muted playsinline preload="metadata"></video>'
           : '<img src="' + escapeHtml(pm.previewUrl) + '" alt=""/>') +
         '</div>' +
-        '<span class="chat-pending-label">' + (pm.type === "video" ? "Video pronto per l'invio — non ancora inviato" : "Foto pronta per l'invio — non ancora inviata") + '</span>' +
+        '<span class="chat-pending-label">' + (pm.type === "video" ? "Video pronto: premi invio per spedirlo" : "Foto pronta: premi invio per spedirla") + '</span>' +
         '<div class="chat-pending-actions">' +
         '<button type="button" data-action="cancel-chat-media" class="btn-ghost btn-sm">' + icon("x") + ' Annulla</button>' +
-        '<button type="button" data-action="confirm-chat-media" class="btn-primary btn-sm">' + icon("send") + ' Invia</button>' +
         '</div></div>';
     } else if (state.chatMediaSending) {
       html += '<div class="chat-pending-media"><span class="chat-pending-label">' + icon("loader", "spin-tiny") + ' Invio in corso...</span></div>';
@@ -1437,7 +1452,7 @@
     var chatLen = (state.chatInput || "").length;
     html += '<form id="chat-form" class="chat-form">' +
       '<label class="chat-attach-btn" title="Invia foto o video"><input type="file" id="chat-media-input" accept="image/*,video/*" style="display:none"/>' + icon("paperclip") + '</label>' +
-      '<input id="chat-input" type="text" autocomplete="off" maxlength="' + MAX_CHAT_MESSAGE_LEN + '" placeholder="Scrivi un messaggio..." value="' + escapeHtml(state.chatInput) + '"/>' +
+      '<input id="chat-input" type="text" autocomplete="off" maxlength="' + MAX_CHAT_MESSAGE_LEN + '" placeholder="' + (state.pendingChatMedia ? "Didascalia (opzionale)..." : "Scrivi un messaggio...") + '" value="' + escapeHtml(state.chatInput) + '"/>' +
       (chatLen > MAX_CHAT_MESSAGE_LEN - 80 ? '<span class="chat-char-count' + (chatLen >= MAX_CHAT_MESSAGE_LEN ? " limit" : "") + '">' + chatLen + '/' + MAX_CHAT_MESSAGE_LEN + '</span>' : '') +
       '<button type="submit" class="btn-icon" title="Invia">' + icon("send") + '</button></form>';
     html += '</div>';
@@ -1696,7 +1711,6 @@
     else if (action === "submit-chat-trade") { submitChatTrade(); }
     else if (action === "view-chat-media") { viewChatMedia(t.dataset.id); }
     else if (action === "cancel-chat-media") { cancelChatMedia(); }
-    else if (action === "confirm-chat-media") { confirmSendChatMedia(); }
     else if (action === "go-profile") { goToOwnInventory(); }
     else if (action === "install-app") { promptInstall(); }
     else if (action === "open-trade-builder") { state.showTradeBuilder = true; render(); }
@@ -1769,9 +1783,17 @@
     render();
   }
 
-  /* ============ stato connessione (banner offline) ============ */
+  /* ============ stato connessione (banner offline) ============
+     navigator.onLine dice solo se il dispositivo e' collegato a una rete, non se quella
+     rete arriva davvero a Firebase (wifi senza internet, rete che blocca il dominio, ecc):
+     per questo lo usiamo solo per un primo responso immediato, mentre il segnale vero
+     arriva da ".info/connected" di Firebase, che riflette la connessione reale al database. */
   window.addEventListener("online", function () { setState({ isOffline: false }); render(); });
   window.addEventListener("offline", function () { setState({ isOffline: true }); render(); });
+  fbDb.ref(".info/connected").on("value", function (snap) {
+    setState({ isOffline: snap.val() !== true });
+    render();
+  });
 
   /* ============ PWA: installazione e service worker ============ */
   var deferredInstallPrompt = null;
