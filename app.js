@@ -766,7 +766,7 @@
   document.addEventListener("change", function (e) {
     if (e.target && e.target.id === "photo-input") handleFileChange(e);
     else if (e.target && e.target.id === "photo-input-edit") handleFileChange(e);
-    else if (e.target && e.target.classList.contains("avail-toggle")) toggleAvailable(e.target.dataset.id);
+    else if (e.target && e.target.type === "checkbox" && e.target.closest(".avail-toggle")) toggleAvailable(e.target.dataset.id);
   });
 
   document.addEventListener("input", function (e) {
