@@ -17,6 +17,7 @@
     check: '<path d="M5 12.5l5 5L19 7"/>',
     x: '<path d="M6 6l12 12M18 6L6 18"/>',
     trash: '<path d="M4 7h16"/><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/><path d="M6 7l1 12.5A1.5 1.5 0 0 0 8.5 21h7a1.5 1.5 0 0 0 1.5-1.5L18 7"/>',
+    edit: '<path d="M3 17.25V21h3.75L17.81 9.94m-5.66-5.66l3.54-3.54a2 2 0 0 1 2.83 0l3.54 3.54a2 2 0 0 1 0 2.83l-3.54 3.54"/>',
     clock: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
     inbox: '<path d="M4 12h4l2 3h4l2-3h4"/><path d="M5.5 5h13l1.5 7v6a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 18v-6l1.5-7z"/>',
     send: '<path d="M4 12l16-8-6 16-3-7-7-1z"/>',
@@ -122,15 +123,19 @@
         var img = new Image();
         img.onerror = function () { reject(new Error("Impossibile elaborare l'immagine.")); };
         img.onload = function () {
-          var width = img.width, height = img.height;
-          if (width > maxDim || height > maxDim) {
-            if (width >= height) { height = Math.round(height * maxDim / width); width = maxDim; }
-            else { width = Math.round(width * maxDim / height); height = maxDim; }
+          var c = document.createElement("canvas"), cw = img.width, ch = img.height;
+          var side = Math.min(cw, ch), x = (cw - side) / 2, y = (ch - side) / 2;
+          c.width = c.height = side;
+          var ctx = c.getContext("2d");
+          ctx.drawImage(img, x, y, side, side, 0, 0, side, side);
+          if (side > maxDim) {
+            var c2 = document.createElement("canvas");
+            c2.width = c2.height = maxDim;
+            c2.getContext("2d").drawImage(c, 0, 0, side, side, 0, 0, maxDim, maxDim);
+            c2.toBlob(function (blob) { resolve(blob); }, "image/jpeg", quality);
+          } else {
+            c.toBlob(function (blob) { resolve(blob); }, "image/jpeg", quality);
           }
-          var canvas = document.createElement("canvas");
-          canvas.width = width; canvas.height = height;
-          canvas.getContext("2d").drawImage(img, 0, 0, width, height);
-          resolve(canvas.toDataURL("image/jpeg", quality));
         };
         img.src = ev.target.result;
       };
@@ -138,1155 +143,523 @@
     });
   }
 
-  function timeAgo(ts) {
-    var s = Math.floor((Date.now() - ts) / 1000);
-    if (s < 60) return "poco fa";
-    var m = Math.floor(s / 60);
-    if (m < 60) return m + " min fa";
-    var h = Math.floor(m / 60);
-    if (h < 24) return h + " ore fa";
-    var d = Math.floor(h / 24);
-    return d < 7 ? d + " g fa" : formatDate(ts);
-  }
-
-  /* data breve in italiano; l'anno compare solo se diverso da quello corrente */
-  function formatDate(ts) {
-    var d = new Date(ts), opts = { day: "numeric", month: "short" };
-    if (d.getFullYear() !== new Date().getFullYear()) opts.year = "numeric";
-    return d.toLocaleDateString("it-IT", opts);
-  }
-
-  /* per le ricerche: minuscolo, senza accenti e senza spazi ai bordi */
-  function normalizeText(s) {
-    var t = String(s == null ? "" : s).toLowerCase();
-    try { t = t.normalize("NFD").replace(/[\u0300-\u036f]/g, ""); } catch (e) {}
-    return t.trim();
-  }
-
-  function getPerspective(trade, me) {
-    var isFrom = trade.fromUser === me;
-    return {
-      counterpart: isFrom ? trade.toUser : trade.fromUser,
-      give: isFrom ? trade.offerItems : trade.requestItems,
-      receive: isFrom ? trade.requestItems : trade.offerItems,
-      isFrom: isFrom
-    };
-  }
-
-  /* ============ stato applicazione ============ */
+  /* ============ App State ============ */
   var state = {
-    booting: true, authEmail: "", linkSentTo: null, freshLogin: false, needUsername: false, usernameInput: "", usernameError: "", currentUser: null, authMode: "login", authError: "", authBusy: false,
-    tab: "inventory", message: null,
-    myInventory: [], invLoading: false,
-    communityLoading: false, communityUsers: [], communitySearch: "", selectedUser: null, otherInventory: [], otherInventoryTotal: 0, otherLoading: false,
-    showAddItem: false, newItemName: "", newItemPhotos: [], addBusy: false,
-    showTradeBuilder: false, wantIds: [], offerIds: [], tradeBusy: false,
-    incomingTrades: [], outgoingTrades: [], historyTrades: [], tradesLoading: false, respondingId: null, tradesSig: "",
-    historyFilter: "all", historySearch: "", historyLimit: HISTORY_PAGE, inventorySearch: "",
-    incomingFriendReqs: [], outgoingFriendReqs: [], friends: [], friendsSig: "", friendsLoading: false, friendInput: "", friendAddBusy: false, friendBusyId: null,
+    booting: true,
+    currentUser: "",
+    needUsername: false,
+    usernameInput: "",
+    tab: "inventory",
+    message: null,
+    authMode: "login",
+    authEmail: "",
+    authPassword: "",
+    authError: "",
+    linkSentTo: null,
+    showAddItem: false,
+    newItemName: "",
+    newItemPhotos: [],
+    showEditItem: false,
+    editItemId: null,
+    editItemName: "",
+    editItemPhotos: [],
+    inventory: [],
+    inventorySearch: "",
+    showTradeBuilder: false,
+    wantIds: [],
+    offerIds: [],
+    community: [],
+    communitySearch: "",
+    selectedUser: null,
+    otherUserInventory: [],
+    historyFilter: "completed",
+    historyLimit: HISTORY_PAGE,
+    historySearch: "",
+    history: [],
+    friends: [],
+    friendInput: "",
     lightbox: null
   };
-  var msgTimer = null;
-  var tradesListeners = null;
-  var friendsPollInterval = null;
 
-  function notify(type, text) {
-    state.message = { type: type, text: text };
-    render();
-    if (msgTimer) clearTimeout(msgTimer);
-    msgTimer = setTimeout(function () { state.message = null; render(); }, 4500);
+  function setState(changes) { Object.assign(state, changes); }
+
+  function setMessage(text, type) { state.message = { text: text, type: type || "success" }; setTimeout(function () { state.message = null; }, 4000); render(); }
+
+  /* ============ utility per items ============ */
+  function getItemById(id, arr) { return arr && arr.find(function (i) { return i && i.id === id; }); }
+  function findItemIndexById(id, arr) { return arr && arr.findIndex(function (i) { return i && i.id === id; }); }
+
+  /* ============ UI - modali ============ */
+  function openAddItem() { setState({ showAddItem: true, newItemName: "", newItemPhotos: [] }); render(); }
+  function openEditItem(item) { setState({ showEditItem: true, editItemId: item.id, editItemName: item.name, editItemPhotos: itemPhotos(item).slice() }); render(); }
+  function closeEditItem() { setState({ showEditItem: false, editItemId: null, editItemName: "", editItemPhotos: [] }); render(); }
+
+  function handleFileChange(e) {
+    var file = e.target.files[0];
+    if (!file) return;
+    var isEditing = state.showEditItem;
+    var targetPhotos = isEditing ? state.editItemPhotos : state.newItemPhotos;
+    if (targetPhotos.length >= MAX_ITEM_PHOTOS) { setMessage("Massimo " + MAX_ITEM_PHOTOS + " foto per oggetto.", "error"); return; }
+    resizeImageFile(file).then(function (blob) {
+      var reader = new FileReader();
+      reader.onload = function (ev) { targetPhotos.push(ev.target.result); render(); };
+      reader.readAsDataURL(blob);
+    }).catch(function (err) { setMessage(err.message, "error"); });
   }
 
-  /* ============ autenticazione ============ */
-  /* Metodi: email+password, link via email (senza password), Google.
-     Dopo l'accesso, ogni utente Firebase (uid) deve avere uno username: profiles/{uid} + usernames/{username}. */
-  var LINK_EMAIL_KEY = "baratto:emailForSignIn"; /* solo comodita' per-dispositivo, non e' un dato dell'app */
-  var EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-  function completeLogin(username, silent, isNew) {
-    state.currentUser = username;
-    state.authBusy = false; state.needUsername = false; state.linkSentTo = null;
-    state.authError = ""; state.tab = "inventory";
-    render();
-    loadMyInventory();
-    loadTrades(true);
-    loadFriends(true);
-    if (!silent) notify("success", (isNew ? "Benvenuto, " : "Bentornato, ") + username + "!");
+  /* ============ add item ============ */
+  function submitNewItem(e) {
+    e.preventDefault();
+    var name = (state.newItemName || "").trim();
+    if (!name) { setMessage("Inserisci il nome dell'oggetto.", "error"); return; }
+    setState({ showAddItem: false });
+    var item = { id: genId(), name: name, photos: state.newItemPhotos, available: true, created: Date.now() };
+    updateInventory(state.currentUser.toLowerCase(), function (inv) { inv.push(item); return inv; }).then(function () {
+      setState({ newItemName: "", newItemPhotos: [] });
+      setMessage("Oggetto aggiunto con successo.", "success");
+      loadInventory();
+    }).catch(function (err) { setMessage("Errore: " + err.message, "error"); });
   }
 
-  function authFail(err) {
-    console.error("auth error", err);
-    state.authBusy = false; state.freshLogin = false;
-    state.authError = authErrorMessage(err);
-    render();
-  }
-
-  /* cerca lo username collegato all'uid; se manca, chiede di sceglierlo */
-  function resolveProfile(fbUser) {
-    return dbGet("profiles/" + fbUser.uid).then(function (profile) {
-      var silent = !state.freshLogin; state.freshLogin = false;
-      if (profile && profile.username) { completeLogin(profile.username, silent); }
-      else {
-        state.authBusy = false; state.needUsername = true; state.usernameError = ""; state.usernameInput = "";
-        render();
+  /* ============ edit item ============ */
+  function submitEditItem(e) {
+    e.preventDefault();
+    var name = (state.editItemName || "").trim();
+    if (!name) { setMessage("Inserisci il nome dell'oggetto.", "error"); return; }
+    setState({ showEditItem: false });
+    var editId = state.editItemId;
+    updateInventory(state.currentUser.toLowerCase(), function (inv) {
+      var idx = findItemIndexById(editId, inv);
+      if (idx >= 0) {
+        var item = inv[idx];
+        item.name = name;
+        item.photos = state.editItemPhotos;
       }
-    }).catch(authFail);
+      return inv;
+    }).then(function () {
+      setState({ editItemId: null, editItemName: "", editItemPhotos: [] });
+      setMessage("Oggetto modificato con successo.", "success");
+      loadInventory();
+    }).catch(function (err) { setMessage("Errore: " + err.message, "error"); });
   }
 
+  /* ============ delete item ============ */
+  function deleteItem(id) {
+    if (!confirm("Eliminare questo oggetto?")) return;
+    updateInventory(state.currentUser.toLowerCase(), function (inv) {
+      var idx = findItemIndexById(id, inv);
+      if (idx >= 0) inv.splice(idx, 1);
+      return inv;
+    }).then(function () { setMessage("Oggetto eliminato.", "success"); loadInventory(); }).catch(function (err) { setMessage("Errore: " + err.message, "error"); });
+  }
+
+  /* ============ toggle availability ============ */
+  function toggleAvailable(id) {
+    updateInventory(state.currentUser.toLowerCase(), function (inv) {
+      var item = getItemById(id, inv);
+      if (item) item.available = !item.available;
+      return inv;
+    }).then(loadInventory).catch(function (err) { setMessage("Errore: " + err.message, "error"); });
+  }
+
+  /* ============ loads ============ */
+  function loadInventory() { getInventory(state.currentUser.toLowerCase()).then(function (inv) { setState({ inventory: inv }); render(); }); }
+  /* "inventories" e' un oggetto {usernameLower: [item, item, ...]}: qui lo appiattiamo
+     in un'unica lista di oggetti disponibili, ciascuno con il proprietario ("user") allegato */
+  function loadCommunity() {
+    dbGet("inventories").then(function (invs) {
+      invs = invs || {};
+      var all = [];
+      Object.keys(invs).forEach(function (uLower) {
+        if (sameUser(uLower, state.currentUser)) return;
+        toArray(invs[uLower]).forEach(function (item) {
+          if (!isAvailable(item)) return;
+          var copy = Object.assign({}, item);
+          copy.user = uLower;
+          all.push(copy);
+        });
+      });
+      setState({ community: all });
+      render();
+    });
+  }
+  function loadTrades() { dbGet("trades").then(function (trades) { var all = toArray(trades); setState({ history: all }); updateHistory(); }); }
+  /* carica sia gli amici confermati (users/{u}/friends) sia le richieste pendenti
+     (friendRequests), in entrata e in uscita, cosi' la tab Amici puo' mostrarle tutte */
+  function loadFriends() {
+    var uLower = state.currentUser.toLowerCase();
+    Promise.all([
+      dbGet("users/" + uLower + "/friends"),
+      dbGet("friendRequests")
+    ]).then(function (results) {
+      var accepted = toArray(results[0]).map(function (f) { return Object.assign({}, f, { status: "accepted" }); });
+      var allRequests = toArray(results[1]);
+      var incoming = allRequests.filter(function (r) { return sameUser(r.to, state.currentUser); })
+        .map(function (r) { return { id: r.id, username: r.from, status: "pending" }; });
+      var outgoing = allRequests.filter(function (r) { return sameUser(r.from, state.currentUser); })
+        .map(function (r) { return { id: r.id, username: r.to, status: "outgoing" }; });
+      setState({ friends: accepted.concat(incoming, outgoing) });
+      render();
+    });
+  }
+  function updateHistory() {
+    var search = (state.historySearch || "").toLowerCase(), filter = state.historyFilter;
+    var h = state.history.filter(function (t) {
+      var matchSearch = !search || (t.from || "").toLowerCase().indexOf(search) !== -1 || (t.to || "").toLowerCase().indexOf(search) !== -1;
+      var matchFilter = filter === "completed" ? t.accepted : filter === "pending" ? !t.accepted && !t.declined : t.declined;
+      return matchSearch && matchFilter;
+    }).sort(function (a, b) { return (b.created || 0) - (a.created || 0); }).slice(0, state.historyLimit);
+    setState({ history: h });
+    render();
+  }
+
+  /* ============ auth ============ */
   function handleAuthSubmit(e) {
     e.preventDefault();
-    var email = (document.getElementById("auth-email").value || "").trim();
-    state.authEmail = email;
-    if (state.authMode === "link") { handleSendLink(email); return; }
-    var pass = document.getElementById("auth-password").value;
-    if (state.authMode === "login") handleLogin(email, pass);
-    else handleRegister(email, pass, document.getElementById("auth-password2").value);
+    var email = state.authEmail.trim();
+    if (!email) { setState({ authError: "Inserisci email." }); render(); return; }
+    if (state.authMode === "login" || state.authMode === "register") {
+      var pw = state.authPassword || "";
+      if (pw.length < 6) { setState({ authError: "Password troppo corta." }); render(); return; }
+      var fn = state.authMode === "login" ? fbAuth.signInWithEmailAndPassword : fbAuth.createUserWithEmailAndPassword;
+      fn.call(fbAuth, email, pw).catch(function (err) { setState({ authError: authErrorMessage(err) }); render(); });
+    }
   }
-
-  function handleRegister(email, pass, pass2) {
-    state.authError = "";
-    if (!EMAIL_RE.test(email)) { state.authError = "Inserisci un'email valida."; render(); return; }
-    if (pass.length < 6) { state.authError = "La password deve avere almeno 6 caratteri."; render(); return; }
-    if (pass !== pass2) { state.authError = "Le password non coincidono."; render(); return; }
-    state.authBusy = true; state.freshLogin = true; render();
-    fbAuth.createUserWithEmailAndPassword(email, pass).catch(authFail);
-  }
-
-  function handleLogin(email, pass) {
-    state.authError = "";
-    if (!email || !pass) { state.authError = "Inserisci email e password."; render(); return; }
-    state.authBusy = true; state.freshLogin = true; render();
-    fbAuth.signInWithEmailAndPassword(email, pass).catch(authFail);
-  }
-
   function handleGoogle() {
-    state.authError = "";
-    state.authBusy = true; state.freshLogin = true; render();
     var provider = new firebase.auth.GoogleAuthProvider();
-    provider.setCustomParameters({ prompt: "select_account" });
-    fbAuth.signInWithPopup(provider).catch(authFail);
+    fbAuth.signInWithPopup(provider).catch(function (err) { setState({ authError: authErrorMessage(err) }); render(); });
+  }
+  function handleLogout() { fbAuth.signOut(); }
+
+  function sendEmailLink(email) {
+    fbAuth.sendSignInLinkToEmail(email, { url: window.location.href, handleCodeInApp: true }).then(function () {
+      window.localStorage.setItem("emailForSignIn", email);
+      setState({ linkSentTo: email });
+      render();
+    }).catch(function (err) { setState({ authError: authErrorMessage(err) }); render(); });
   }
 
-  function handleSendLink(email) {
-    state.authError = "";
-    if (!EMAIL_RE.test(email)) { state.authError = "Inserisci un'email valida."; render(); return; }
-    state.authBusy = true; render();
-    var settings = { url: window.location.origin + window.location.pathname, handleCodeInApp: true };
-    fbAuth.sendSignInLinkToEmail(email, settings).then(function () {
-      try { localStorage.setItem(LINK_EMAIL_KEY, email); } catch (e) {}
-      state.authBusy = false; state.linkSentTo = email; render();
-    }).catch(authFail);
-  }
-
-  /* se la pagina e' stata aperta dal link ricevuto via email, completa l'accesso */
   function completeEmailLinkSignIn() {
-    var href = window.location.href;
-    if (!fbAuth.isSignInWithEmailLink(href)) return;
-    var email = null;
-    try { email = localStorage.getItem(LINK_EMAIL_KEY); } catch (e) {}
-    if (!email) email = window.prompt("Conferma la tua email per completare l'accesso:");
-    function cleanUrl() { try { window.history.replaceState(null, "", window.location.pathname); } catch (e) {} }
-    if (!email) { cleanUrl(); return; }
-    state.authBusy = true; state.freshLogin = true; render();
-    fbAuth.signInWithEmailLink(email.trim(), href).then(function () {
-      try { localStorage.removeItem(LINK_EMAIL_KEY); } catch (e) {}
-      cleanUrl();
-    }).catch(function (err) { cleanUrl(); authFail(err); });
+    if (fbAuth.isSignInWithEmailLink(window.location.href)) {
+      var email = window.localStorage.getItem("emailForSignIn");
+      if (!email) { email = window.prompt("Email per completare sign in:"); }
+      if (email) {
+        fbAuth.signInWithEmailLink(email, window.location.href).catch(function (err) { setState({ authError: authErrorMessage(err) }); render(); });
+        window.localStorage.removeItem("emailForSignIn");
+      }
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+  }
+
+  function resolveProfile(fbUser) {
+    dbGet("users/" + fbUser.email.toLowerCase()).then(function (profile) {
+      var uname = profile && profile.username;
+      if (uname) { setState({ currentUser: uname }); loadInventory(); loadCommunity(); loadFriends(); loadTrades(); }
+      else { setState({ needUsername: true, usernameInput: "" }); }
+      render();
+    });
   }
 
   function handleClaimUsername(e) {
     e.preventDefault();
-    var uname = (state.usernameInput || "").trim();
-    var user = fbAuth.currentUser;
-    state.usernameError = "";
-    if (!user) { state.usernameError = "Sessione scaduta: accedi di nuovo."; render(); return; }
-    if (!USERNAME_RE.test(uname)) { state.usernameError = "Lo username deve avere 3-20 caratteri: lettere, numeri o underscore."; render(); return; }
-    state.authBusy = true; render();
-    var lower = uname.toLowerCase();
-    dbGet("usernames/" + lower).then(function (existing) {
-      if (existing) { state.authBusy = false; state.usernameError = "Questo username è già in uso, scegline un altro."; render(); return; }
-      var updates = {};
-      updates["usernames/" + lower] = { uid: user.uid, username: uname, createdAt: Date.now() };
-      updates["profiles/" + user.uid] = { username: uname };
-      return fbDb.ref().update(updates).then(function () { state.freshLogin = false; completeLogin(uname, false, true); });
-    }).catch(function (err) {
-      console.error("claim username", err);
-      state.authBusy = false; state.usernameError = authErrorMessage(err) || "Errore imprevisto. Riprova."; render();
-    });
-  }
-
-  function handleLogout() {
-    stopTradesSync(); stopFriendsPolling();
-    fbAuth.signOut();
-    state.currentUser = null; state.myInventory = []; state.selectedUser = null; state.otherInventory = [];
-    state.incomingTrades = []; state.outgoingTrades = []; state.historyTrades = []; state.communityUsers = []; state.communitySearch = "";
-    state.tradesSig = ""; state.historyFilter = "all"; state.historySearch = ""; state.historyLimit = HISTORY_PAGE; state.inventorySearch = "";
-    state.incomingFriendReqs = []; state.outgoingFriendReqs = []; state.friends = []; state.friendsSig = "";
-    state.friendInput = ""; state.friendAddBusy = false; state.friendBusyId = null; state.friendsLoading = false;
-    state.tab = "inventory"; state.authMode = "login"; state.lightbox = null;
-    state.needUsername = false; state.linkSentTo = null; state.authBusy = false; state.freshLogin = false; state.authError = "";
-    render();
-  }
-
-  /* ============ inventario ============ */
-  function loadMyInventory() {
-    if (!state.currentUser) return Promise.resolve();
-    state.invLoading = true; render();
-    return getInventory(state.currentUser.toLowerCase()).then(function (inv) {
-      state.myInventory = inv;
-    }).catch(function (e) {
-      console.error("loadMyInventory", e);
-      notify("error", "Impossibile caricare l'inventario.");
-    }).then(function () { state.invLoading = false; render(); });
-  }
-
-  function openAddItem() {
-    state.newItemName = ""; state.newItemPhotos = []; state.showAddItem = true; render();
-    var el = document.getElementById("new-item-name");
-    if (el) el.focus();
-  }
-
-  function handleFileChange(e) {
-    var input = e.target;
-    var files = input.files ? Array.prototype.slice.call(input.files) : [];
-    if (!files.length) return;
-    var current = state.newItemPhotos || [];
-    var room = MAX_ITEM_PHOTOS - current.length;
-    if (room <= 0) {
-      notify("error", "Puoi caricare al massimo " + MAX_ITEM_PHOTOS + " foto per oggetto.");
-      input.value = ""; return;
-    }
-    var toProcess = files.slice(0, room);
-    var overflow = files.length - toProcess.length;
-    Promise.allSettled(toProcess.map(function (f) { return resizeImageFile(f); })).then(function (results) {
-      var okUrls = [], failCount = 0;
-      results.forEach(function (r) { if (r.status === "fulfilled") okUrls.push(r.value); else failCount++; });
-      state.newItemPhotos = current.concat(okUrls);
-      render();
-      if (failCount > 0) notify("error", failCount === 1 ? "Una foto non è stata caricata." : failCount + " foto non sono state caricate.");
-      else if (overflow > 0) notify("error", "Puoi caricare al massimo " + MAX_ITEM_PHOTOS + " foto: " + overflow + " immagini non sono state aggiunte.");
-      input.value = "";
-    });
-  }
-
-  function submitNewItem(e) {
-    e.preventDefault();
-    var name = (state.newItemName || "").trim();
-    if (!name) { notify("error", "Dai un nome all'oggetto."); return; }
-    state.addBusy = true; render();
-    var item = { id: genId(), name: name, photos: state.newItemPhotos || [], available: true, createdAt: Date.now() };
-    updateInventory(state.currentUser.toLowerCase(), function (inv) { return inv.concat([item]); }).then(function (updated) {
-      state.addBusy = false;
-      state.myInventory = updated; state.newItemName = ""; state.newItemPhotos = []; state.showAddItem = false;
-      if (state.inventorySearch && normalizeText(item.name).indexOf(normalizeText(state.inventorySearch)) === -1) state.inventorySearch = "";
-      notify("success", "Oggetto aggiunto all'inventario.");
-    }).catch(function (err) {
-      console.error("submitNewItem", err);
-      state.addBusy = false; notify("error", "Errore nel salvataggio dell'oggetto."); render();
-    });
-  }
-
-  function deleteItem(itemId) {
-    updateInventory(state.currentUser.toLowerCase(), function (inv) {
-      return inv.filter(function (i) { return i.id !== itemId; });
-    }).then(function (updated) {
-      state.myInventory = updated; notify("success", "Oggetto rimosso.");
-    }).catch(function (err) { console.error("deleteItem", err); notify("error", "Errore durante la rimozione."); });
-  }
-
-  function toggleAvailable(itemId) {
-    updateInventory(state.currentUser.toLowerCase(), function (inv) {
-      return inv.map(function (i) {
-        if (i.id !== itemId) return i;
-        return Object.assign({}, i, { available: i.available === false });
+    var u = (state.usernameInput || "").trim();
+    if (!USERNAME_RE.test(u)) { setState({ authError: "Nome: 3-20 char, lettere/numeri/_" }); render(); return; }
+    var uLower = u.toLowerCase();
+    dbGet("users/" + uLower).then(function (existing) {
+      if (existing) { setState({ authError: "Nome già in uso." }); render(); return; }
+      var fbUser = fbAuth.currentUser;
+      return dbSet("users/" + fbUser.email.toLowerCase(), { username: u }).then(function () {
+        return dbSet("users/" + uLower, { email: fbUser.email, username: u });
+      }).then(function () {
+        setState({ currentUser: u, needUsername: false });
+        loadInventory();
+        loadCommunity();
+        loadFriends();
+        loadTrades();
+        render();
       });
-    }).then(function (updated) {
-      state.myInventory = updated; render();
-    }).catch(function (err) { console.error("toggleAvailable", err); notify("error", "Errore durante l'aggiornamento."); render(); });
+    }).catch(function (err) { setState({ authError: "Errore: " + err.message }); render(); });
   }
 
-  /* ============ galleria foto (lightbox) ============ */
-  function viewPhotos(itemId, source) {
-    var list = source === "mine" ? state.myInventory : state.otherInventory;
-    var item = null;
-    for (var i = 0; i < list.length; i++) { if (list[i].id === itemId) { item = list[i]; break; } }
-    var photos = itemPhotos(item);
-    if (!photos.length) return;
-    state.lightbox = { photos: photos, index: 0, name: item.name };
-    render();
-  }
-  function closeLightbox() { state.lightbox = null; render(); }
-  function lightboxStep(delta) {
-    if (!state.lightbox) return;
-    var n = state.lightbox.photos.length;
-    state.lightbox.index = (state.lightbox.index + delta + n) % n;
-    render();
+  /* ============ community & friends ============ */
+  function sendFriendRequest(username) {
+    var id = genId();
+    var req = { id: id, from: state.currentUser, to: username, created: Date.now() };
+    dbSet("friendRequests/" + id, req).then(function () { setMessage("Richiesta inviata.", "success"); loadFriends(); }).catch(function (err) { setMessage("Errore: " + dbErrorMessage(err, err.message), "error"); });
   }
 
-  /* ============ community ============ */
-  function loadCommunity() {
-    if (!state.currentUser) return;
-    state.communityLoading = true; render();
-    loadFriends(true, true);
-    var me = state.currentUser.toLowerCase();
-    dbGet("usernames").then(function (users) {
-      users = users || {};
-      var others = Object.keys(users).filter(function (u) { return u !== me; });
-      return Promise.all(others.map(function (uLower) {
-        return getInventory(uLower).then(function (inv) {
-          return { username: (users[uLower] && users[uLower].username) || uLower, count: inv.filter(isAvailable).length };
-        }).catch(function () { return { username: (users[uLower] && users[uLower].username) || uLower, count: 0 }; });
-      }));
-    }).then(function (results) {
-      results.sort(function (a, b) { return a.username.localeCompare(b.username); });
-      state.communityUsers = results;
-    }).catch(function (e) {
-      console.error("loadCommunity", e);
-      notify("error", "Impossibile caricare la community.");
-    }).then(function () { state.communityLoading = false; render(); });
-  }
-
-  function openUser(username) {
-    state.selectedUser = username; state.otherLoading = true;
-    state.wantIds = []; state.offerIds = []; state.showTradeBuilder = false;
-    render();
-    loadFriends(true, true);
-    getInventory(username.toLowerCase()).then(function (inv) {
-      state.otherInventoryTotal = inv.length;
-      state.otherInventory = inv.filter(isAvailable);
-    }).catch(function (e) {
-      console.error("openUser", e);
-      notify("error", "Impossibile caricare l'inventario di " + username + ".");
-    }).then(function () { state.otherLoading = false; render(); });
-  }
-
-  function backToCommunity() {
-    state.selectedUser = null; state.otherInventory = []; state.otherInventoryTotal = 0; state.showTradeBuilder = false;
-    state.wantIds = []; state.offerIds = [];
-    render(); loadCommunity();
-  }
-
-  function toggleWant(id) {
-    var idx = state.wantIds.indexOf(id);
-    if (idx === -1) state.wantIds.push(id); else state.wantIds.splice(idx, 1);
-    render();
-  }
-  function toggleOffer(id) {
-    var idx = state.offerIds.indexOf(id);
-    if (idx === -1) state.offerIds.push(id); else state.offerIds.splice(idx, 1);
-    render();
-  }
-
-  function submitTrade() {
-    if (state.wantIds.length === 0) { notify("error", "Seleziona almeno un oggetto che desideri."); return; }
-    if (state.offerIds.length === 0) { notify("error", "Seleziona almeno un tuo oggetto da offrire."); return; }
-    state.tradeBusy = true; render();
-    var offerSnapshot = state.myInventory.filter(function (i) { return state.offerIds.indexOf(i.id) !== -1; })
-      .map(function (i) { return { id: i.id, name: i.name, photos: itemPhotos(i) }; });
-    var wantSnapshot = state.otherInventory.filter(function (i) { return state.wantIds.indexOf(i.id) !== -1; })
-      .map(function (i) { return { id: i.id, name: i.name, photos: itemPhotos(i) }; });
-    var trade = {
-      id: genId(), fromUser: state.currentUser, toUser: state.selectedUser,
-      offerItems: offerSnapshot, requestItems: wantSnapshot, status: "pending", createdAt: Date.now()
-    };
-    dbSet("trades/" + trade.id, trade).then(function () {
-      state.tradeBusy = false;
-      var to = state.selectedUser;
-      state.showTradeBuilder = false; state.wantIds = []; state.offerIds = []; state.tab = "trades";
-      notify("success", "Proposta di scambio inviata a " + to + ".");
-      loadTrades(true);
-    }).catch(function (err) {
-      console.error("submitTrade", err);
-      state.tradeBusy = false; notify("error", "Errore nell'invio della proposta."); render();
-    });
-  }
-
-  /* ============ amici ============
-     Ogni relazione e' un record friendRequests/{id} = { id, fromUser, toUser, status, createdAt, respondedAt }.
-     status "pending" = richiesta in attesa, "accepted" = amicizia attiva. Rifiutare, annullare o rimuovere un amico
-     cancella il record. Gli amici sono i record "accepted" in cui compaio come fromUser o toUser. */
-  function queryFriendRequests(field) {
-    return fbDb.ref("friendRequests").orderByChild(field).equalTo(state.currentUser).once("value").then(function (s) { return toArray(s.val()); });
-  }
-
-  function fetchFriendData() {
-    var me = state.currentUser;
-    return Promise.all([queryFriendRequests("fromUser"), queryFriendRequests("toUser")]).then(function (res) {
-      var seen = {}, mine = [];
-      res[0].concat(res[1]).forEach(function (r) { if (r && r.id && !seen[r.id]) { seen[r.id] = true; mine.push(r); } });
-      mine.sort(function (a, b) { return b.createdAt - a.createdAt; });
-      var byName = {}, friends = [];
-      mine.filter(function (r) { return r.status === "accepted"; }).forEach(function (r) {
-        var other = sameUser(r.fromUser, me) ? r.toUser : r.fromUser;
-        var key = String(other).toLowerCase();
-        if (byName[key]) return;
-        byName[key] = true;
-        friends.push({ id: r.id, username: other, since: r.respondedAt || r.createdAt });
-      });
-      friends.sort(function (a, b) { return a.username.localeCompare(b.username); });
-      return {
-        incoming: mine.filter(function (r) { return r.status === "pending" && sameUser(r.toUser, me); }),
-        outgoing: mine.filter(function (r) { return r.status === "pending" && sameUser(r.fromUser, me); }),
-        friends: friends
-      };
-    });
-  }
-
-  /* applica i dati allo stato; restituisce true se qualcosa e' cambiato */
-  function applyFriendData(d) {
-    var sig = JSON.stringify(d), changed = sig !== state.friendsSig;
-    state.friendsSig = sig;
-    state.incomingFriendReqs = d.incoming; state.outgoingFriendReqs = d.outgoing; state.friends = d.friends;
-    return changed;
-  }
-
-  /* silent: niente spinner. onlyIfChanged: ridisegna solo se i dati sono cambiati (per il polling, cosi' non si perde il focus) */
-  function loadFriends(silent, onlyIfChanged) {
-    if (!state.currentUser) return Promise.resolve();
-    if (!silent) { state.friendsLoading = true; render(); }
-    var me = state.currentUser;
-    return fetchFriendData().then(function (d) {
-      return state.currentUser === me ? applyFriendData(d) : false;
-    }).catch(function (e) {
-      console.error("loadFriends", e);
-      if (!silent) notify("error", dbErrorMessage(e, "Impossibile caricare gli amici."));
-      return true;
-    }).then(function (changed) {
-      var wasLoading = state.friendsLoading;
-      state.friendsLoading = false;
-      if (onlyIfChanged && !changed && !wasLoading) return;
-      render();
-    });
-  }
-
-  function friendStatusWith(username) {
-    var i, list;
-    list = state.friends;
-    for (i = 0; i < list.length; i++) if (sameUser(list[i].username, username)) return { kind: "friend", id: list[i].id };
-    list = state.outgoingFriendReqs;
-    for (i = 0; i < list.length; i++) if (sameUser(list[i].toUser, username)) return { kind: "sent", id: list[i].id };
-    list = state.incomingFriendReqs;
-    for (i = 0; i < list.length; i++) if (sameUser(list[i].fromUser, username)) return { kind: "received", id: list[i].id };
-    return { kind: "none", id: null };
-  }
-
-  function sendFriendRequest(rawName) {
-    var name = (rawName || "").trim();
-    if (!USERNAME_RE.test(name)) { notify("error", "Inserisci uno username valido: 3-20 caratteri tra lettere, numeri e underscore."); return; }
-    if (sameUser(name, state.currentUser)) { notify("error", "Non puoi aggiungere te stesso agli amici."); return; }
-    state.friendAddBusy = true; render();
-    /* dati freschi: cosi' evitiamo doppioni se l'altro utente ci ha appena scritto */
-    Promise.all([dbGet("usernames/" + name.toLowerCase()), fetchFriendData()]).then(function (res) {
-      var rec = res[0];
-      applyFriendData(res[1]);
-      if (!rec) { state.friendAddBusy = false; notify("error", "Nessun utente con questo username."); return; }
-      var target = rec.username || name;
-      var st = friendStatusWith(target);
-      if (st.kind === "friend") { state.friendAddBusy = false; notify("error", "Tu e " + target + " siete già amici."); return; }
-      if (st.kind === "sent") { state.friendAddBusy = false; notify("error", "Hai già inviato una richiesta a " + target + "."); return; }
-      if (st.kind === "received") { state.friendAddBusy = false; state.friendInput = ""; return respondFriendRequest(st.id, true); }
-      var req = { id: genId(), fromUser: state.currentUser, toUser: target, status: "pending", createdAt: Date.now() };
-      return dbSet("friendRequests/" + req.id, req).then(function () {
-        state.friendAddBusy = false; state.friendInput = "";
-        notify("success", "Richiesta di amicizia inviata a " + target + ".");
-        return loadFriends(true);
-      });
-    }).catch(function (err) {
-      console.error("sendFriendRequest", err);
-      state.friendAddBusy = false; notify("error", dbErrorMessage(err, "Errore nell'invio della richiesta."));
-    });
-  }
-
-  function respondFriendRequest(id, accept) {
-    state.friendBusyId = id; render();
-    var ref = fbDb.ref("friendRequests/" + id);
-    return dbGet("friendRequests/" + id).then(function (fresh) {
-      if (!fresh || fresh.status !== "pending") { notify("error", "Questa richiesta non è più valida."); return; }
+  function respondFriendRequest(reqId, accept) {
+    dbGet("friendRequests/" + reqId).then(function (req) {
+      if (!req) return;
+      var u1 = req.from.toLowerCase(), u2 = req.to.toLowerCase();
       if (accept) {
-        return ref.update({ status: "accepted", respondedAt: Date.now() }).then(function () {
-          notify("success", "Ora tu e " + fresh.fromUser + " siete amici!");
-        });
+        return Promise.all([
+          dbGet("users/" + u1 + "/friends").then(function (f) { var arr = toArray(f); if (!arr.find(function (x) { return x && x.username === req.to; })) arr.push({ username: req.to, id: genId() }); return dbSet("users/" + u1 + "/friends", arr); }),
+          dbGet("users/" + u2 + "/friends").then(function (f) { var arr = toArray(f); if (!arr.find(function (x) { return x && x.username === req.from; })) arr.push({ username: req.from, id: genId() }); return dbSet("users/" + u2 + "/friends", arr); })
+        ]);
       }
-      return ref.remove().then(function () { notify("success", "Richiesta rifiutata."); });
-    }).catch(function (err) {
-      console.error("respondFriendRequest", err);
-      notify("error", dbErrorMessage(err, "Errore durante l'operazione. Riprova."));
-    }).then(function () { state.friendBusyId = null; return loadFriends(true); });
+    }).then(function () {
+      return fbDb.ref("friendRequests/" + reqId).remove();
+    }).then(function () { setMessage(accept ? "Amico aggiunto!" : "Richiesta rifiutata.", "success"); loadFriends(); }).catch(function (err) { setMessage("Errore: " + dbErrorMessage(err, err.message), "error"); });
   }
 
-  function cancelFriendRequest(id) {
-    state.friendBusyId = id; render();
-    dbGet("friendRequests/" + id).then(function (fresh) {
-      if (!fresh) { notify("error", "Questa richiesta non esiste più."); return; }
-      if (fresh.status !== "pending") { notify("error", "La richiesta è già stata accettata."); return; }
-      return fbDb.ref("friendRequests/" + id).remove().then(function () { notify("success", "Richiesta annullata."); });
-    }).catch(function (err) {
-      console.error("cancelFriendRequest", err);
-      notify("error", dbErrorMessage(err, "Errore durante l'annullamento."));
-    }).then(function () { state.friendBusyId = null; loadFriends(true); });
+  function cancelFriendRequest(reqId) {
+    fbDb.ref("friendRequests/" + reqId).remove().then(function () { setMessage("Richiesta annullata.", "success"); loadFriends(); }).catch(function (err) { setMessage("Errore: " + err.message, "error"); });
   }
 
   function removeFriend(id, username) {
-    if (!window.confirm("Rimuovere " + username + " dagli amici?")) return;
-    state.friendBusyId = id; render();
-    dbGet("friendRequests/" + id).then(function (fresh) {
-      if (!fresh || fresh.status !== "accepted") { notify("error", "Questa amicizia non esiste più."); return; }
-      return fbDb.ref("friendRequests/" + id).remove().then(function () { notify("success", username + " è stato rimosso dagli amici."); });
-    }).catch(function (err) {
-      console.error("removeFriend", err);
-      notify("error", dbErrorMessage(err, "Errore durante la rimozione."));
-    }).then(function () { state.friendBusyId = null; loadFriends(true); });
+    if (!confirm("Rimuovere " + username + " dai tuoi amici?")) return;
+    var u = state.currentUser.toLowerCase();
+    dbGet("users/" + u + "/friends").then(function (f) {
+      var arr = toArray(f);
+      var idx = arr.findIndex(function (x) { return x && x.id === id; });
+      if (idx >= 0) arr.splice(idx, 1);
+      return dbSet("users/" + u + "/friends", arr);
+    }).then(function () { setMessage("Amico rimosso.", "success"); loadFriends(); }).catch(function (err) { setMessage("Errore: " + err.message, "error"); });
   }
 
-  function handleAddFriendSubmit(e) {
-    e.preventDefault();
-    var el = document.getElementById("friend-username");
-    sendFriendRequest(el ? el.value : state.friendInput);
-  }
+  function openUser(username) { setState({ selectedUser: username, otherUserInventory: [] }); getInventory(username.toLowerCase()).then(function (inv) { setState({ otherUserInventory: inv }); render(); }); }
+  function backToCommunity() { setState({ selectedUser: null, otherUserInventory: [] }); render(); }
+  function openFriend(username) { openUser(username); setState({ tab: "community" }); render(); }
 
-  function openFriend(username) {
-    stopFriendsPolling();
-    state.tab = "community";
-    openUser(username);
-  }
+  /* ============ trades ============ */
+  function toggleWant(id) { var i = state.wantIds.indexOf(id); if (i >= 0) state.wantIds.splice(i, 1); else state.wantIds.push(id); render(); }
+  function toggleOffer(id) { var i = state.offerIds.indexOf(id); if (i >= 0) state.offerIds.splice(i, 1); else state.offerIds.push(id); render(); }
 
-  function startFriendsPolling() { stopFriendsPolling(); friendsPollInterval = setInterval(function () { loadFriends(true, true); }, 15000); }
-  function stopFriendsPolling() { if (friendsPollInterval) { clearInterval(friendsPollInterval); friendsPollInterval = null; } }
-
-  /* ============ scambi ============ */
-  function queryTrades(field) {
-    return fbDb.ref("trades").orderByChild(field).equalTo(state.currentUser).once("value").then(function (s) { return toArray(s.val()); });
-  }
-
-  /* costruisce le liste (ricevute / inviate / storico) dai risultati delle due query; true se qualcosa e' cambiato */
-  function applyTradeLists(fromList, toList) {
-    var seen = {}, mine = [];
-    fromList.concat(toList).forEach(function (t) { if (t && t.id && !seen[t.id]) { seen[t.id] = true; mine.push(t); } });
-    mine.sort(function (a, b) { return b.createdAt - a.createdAt; });
-    var sig = mine.map(function (t) { return t.id + ":" + t.status + ":" + (t.respondedAt || 0); }).join("|");
-    var changed = sig !== state.tradesSig;
-    state.tradesSig = sig;
-    state.incomingTrades = mine.filter(function (t) { return t.toUser === state.currentUser && t.status === "pending"; });
-    state.outgoingTrades = mine.filter(function (t) { return t.fromUser === state.currentUser && t.status === "pending"; });
-    /* lo storico e' ordinato per data di conclusione (risposta), non di creazione */
-    state.historyTrades = mine.filter(function (t) { return t.status !== "pending"; })
-      .sort(function (a, b) { return historyDate(b) - historyDate(a); });
-    return changed;
-  }
-
-  function loadTrades(silent) {
-    if (!state.currentUser) return Promise.resolve();
-    if (!silent) { state.tradesLoading = true; render(); }
-    return Promise.all([queryTrades("fromUser"), queryTrades("toUser")]).then(function (res) {
-      applyTradeLists(res[0], res[1]);
-    }).catch(function (e) {
-      console.error("loadTrades", e);
-      if (!silent) notify("error", "Impossibile caricare gli scambi.");
-    }).then(function () { state.tradesLoading = false; render(); });
+  function submitTrade() {
+    if (!state.selectedUser) return;
+    if (!state.wantIds.length || !state.offerIds.length) { setMessage("Seleziona cosa vuoi e cosa offri.", "error"); return; }
+    var trade = {
+      id: genId(),
+      from: state.currentUser,
+      to: state.selectedUser,
+      wantIds: state.wantIds,
+      offerIds: state.offerIds,
+      created: Date.now(),
+      accepted: false,
+      declined: false
+    };
+    dbSet("trades/" + trade.id, trade).then(function () {
+      setState({ showTradeBuilder: false, wantIds: [], offerIds: [] });
+      setMessage("Scambio proposto!", "success");
+      loadTrades();
+    }).catch(function (err) { setMessage("Errore: " + err.message, "error"); });
   }
 
   function respondTrade(tradeId, accept) {
-    state.respondingId = tradeId; render();
-    var tradeRef = fbDb.ref("trades/" + tradeId);
-    dbGet("trades/" + tradeId).then(function (fresh) {
-      if (!fresh || fresh.status !== "pending") {
-        state.respondingId = null; notify("error", "Questa proposta non è più valida."); return loadTrades(true);
-      }
-      if (!accept) {
-        return tradeRef.update({ status: "declined", respondedAt: Date.now() }).then(function () {
-          state.respondingId = null; notify("success", "Proposta rifiutata."); return loadTrades(true);
-        });
-      }
-      var fromKey = fresh.fromUser.toLowerCase(), toKey = fresh.toUser.toLowerCase();
-      return Promise.all([getInventory(fromKey), getInventory(toKey)]).then(function (invs) {
-        var fromInventory = invs[0], toInventory = invs[1];
-        var offerIdsList = toArray(fresh.offerItems).map(function (i) { return i.id; });
-        var requestIdsList = toArray(fresh.requestItems).map(function (i) { return i.id; });
-        var offerAvailable = offerIdsList.every(function (id) { return fromInventory.some(function (i) { return i.id === id && isAvailable(i); }); });
-        var requestAvailable = requestIdsList.every(function (id) { return toInventory.some(function (i) { return i.id === id && isAvailable(i); }); });
-        if (!offerAvailable || !requestAvailable) {
-          return tradeRef.update({ status: "failed", respondedAt: Date.now() }).then(function () {
-            state.respondingId = null;
-            notify("error", "Uno o più oggetti non sono più disponibili. Scambio annullato."); return loadTrades(true);
-          });
-        }
-        var movedFromItems = fromInventory.filter(function (i) { return offerIdsList.indexOf(i.id) !== -1; });
-        var movedToItems = toInventory.filter(function (i) { return requestIdsList.indexOf(i.id) !== -1; });
-        var newFromInventory = fromInventory.filter(function (i) { return offerIdsList.indexOf(i.id) === -1; }).concat(movedToItems);
-        var newToInventory = toInventory.filter(function (i) { return requestIdsList.indexOf(i.id) === -1; }).concat(movedFromItems);
-        /* aggiornamento multi-percorso: entrambi gli inventari e lo stato dello scambio cambiano insieme, o niente */
-        var updates = {};
-        updates["inventories/" + fromKey] = newFromInventory.length ? newFromInventory : null;
-        updates["inventories/" + toKey] = newToInventory.length ? newToInventory : null;
-        updates["trades/" + tradeId + "/status"] = "accepted";
-        updates["trades/" + tradeId + "/respondedAt"] = Date.now();
-        return fbDb.ref().update(updates).then(function () {
-          var me = state.currentUser.toLowerCase();
-          if (me === toKey) state.myInventory = newToInventory;
-          else if (me === fromKey) state.myInventory = newFromInventory;
-          state.respondingId = null;
-          notify("success", "Scambio completato!"); return loadTrades(true);
-        });
-      });
-    }).catch(function (err) {
-      console.error("respondTrade", err);
-      state.respondingId = null; notify("error", "Errore durante l'operazione. Riprova."); loadTrades(true);
-    });
+    dbGet("trades/" + tradeId).then(function (trade) {
+      if (!trade) return;
+      trade.accepted = accept;
+      trade.declined = !accept;
+      return dbSet("trades/" + tradeId, trade);
+    }).then(function () { setMessage(accept ? "Scambio accettato!" : "Scambio rifiutato.", "success"); loadTrades(); }).catch(function (err) { setMessage("Errore: " + err.message, "error"); });
   }
 
   function cancelTrade(tradeId) {
-    state.respondingId = tradeId; render();
-    dbGet("trades/" + tradeId).then(function (fresh) {
-      if (fresh && fresh.status === "pending") {
-        return fbDb.ref("trades/" + tradeId).update({ status: "cancelled", respondedAt: Date.now() }).then(function () {
-          notify("success", "Proposta annullata.");
-        });
-      }
-    }).catch(function (err) {
-      console.error("cancelTrade", err); notify("error", "Errore durante l'annullamento.");
-    }).then(function () { state.respondingId = null; loadTrades(true); });
+    fbDb.ref("trades/" + tradeId).remove().then(function () { setMessage("Scambio annullato.", "success"); loadTrades(); }).catch(function (err) { setMessage("Errore: " + err.message, "error"); });
   }
 
-  function switchTab(tabId) {
-    state.tab = tabId;
-    if (tabId !== "community") state.selectedUser = null;
+  /* ============ lightbox ============ */
+  function viewPhotos(itemId, source) {
+    var sourceArr = source === "other" ? state.otherUserInventory : state.inventory;
+    var item = getItemById(itemId, sourceArr);
+    if (!item) return;
+    setState({ lightbox: { item: item, photos: itemPhotos(item), index: 0 } });
     render();
-    if (tabId === "inventory") { loadMyInventory(); render(); }
-    if (tabId === "community" && !state.selectedUser) loadCommunity();
-    if (tabId === "trades") { loadTrades(); startTradesSync(); } else { stopTradesSync(); }
-    if (tabId === "friends") { loadFriends(); startFriendsPolling(); } else { stopFriendsPolling(); }
   }
-  /* Listener realtime sulle due query (mittente / destinatario): dopo il primo caricamento Firebase invia solo le
-     differenze, invece di riscaricare l'intero storico (foto comprese) ogni 15 secondi. Si ridisegna solo se cambia qualcosa. */
-  function startTradesSync() {
-    stopTradesSync();
-    if (!state.currentUser) return;
-    var me = state.currentUser, got = [null, null];
-    tradesListeners = ["fromUser", "toUser"].map(function (field, idx) {
-      var q = fbDb.ref("trades").orderByChild(field).equalTo(me);
-      var cb = function (snap) {
-        got[idx] = toArray(snap.val());
-        if (!got[0] || !got[1] || state.currentUser !== me) return;
-        if (applyTradeLists(got[0], got[1])) { state.tradesLoading = false; render(); }
-      };
-      q.on("value", cb, function (err) { console.error("trades sync", err); });
-      return { query: q, cb: cb };
-    });
-  }
-  function stopTradesSync() {
-    if (!tradesListeners) return;
-    tradesListeners.forEach(function (l) { l.query.off("value", l.cb); });
-    tradesListeners = null;
-  }
+  function closeLightbox() { setState({ lightbox: null }); render(); }
+  function lightboxStep(dir) { if (state.lightbox) { state.lightbox.index = (state.lightbox.index + dir + state.lightbox.photos.length) % state.lightbox.photos.length; render(); } }
 
-  /* ============ rendering (stringhe HTML) ============ */
-  function renderItemPhotoBlock(item, source, clickable) {
-    var photos = itemPhotos(item);
-    var openAttrs = (clickable && photos.length) ? ' data-action="view-photos" data-id="' + item.id + '" data-source="' + source + '"' : "";
-    return '<div class="item-photo' + (clickable && photos.length ? " clickable" : "") + '"' + openAttrs + '>' +
-      (photos.length ? '<img src="' + photos[0] + '" alt="' + escapeHtml(item.name) + '" />' : icon("image")) +
-      (photos.length > 1 ? '<span class="item-photo-count">' + icon("image") + photos.length + "</span>" : "") +
-      "</div>";
+  /* ============ search & filter ============ */
+  function clearSearch(target) {
+    if (target === "community") setState({ communitySearch: "" });
+    else if (target === "inventory") setState({ inventorySearch: "" });
+    else if (target === "history") setState({ historySearch: "", historyLimit: HISTORY_PAGE });
+    render();
   }
-
-  var GOOGLE_G = '<svg viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>';
-
-  function renderAuthHeader() {
-    return '<div class="auth-header">' +
-      '<h1 class="display">Baratto</h1>' +
-      '<div class="ornament"><span class="line"></span><span class="dot"></span><span class="line"></span></div>' +
-      '<p>Il registro degli scambi tra collezionisti</p>' +
-    '</div>';
-  }
-
-  function renderUsernameStep() {
-    return '' +
-      '<div class="auth-wrap"><div class="auth-box">' + renderAuthHeader() +
-        '<div class="auth-panel">' +
-          '<p class="auth-hint">Ultimo passo: scegli lo username con cui gli altri collezionisti ti vedranno. Non potrai cambiarlo.</p>' +
-          '<form id="username-form" novalidate>' +
-            '<div class="field has-icon">' +
-              '<label for="new-username">Username</label>' +
-              '<div class="field-icon-wrap">' + icon("user") + '<input type="text" id="new-username" placeholder="mario_rossi" autocomplete="username" maxlength="20" value="' + escapeHtml(state.usernameInput || "") + '" /></div>' +
-            '</div>' +
-            (state.usernameError ? '<div class="banner error">' + icon("alert-circle") + "<span>" + escapeHtml(state.usernameError) + "</span></div>" : "") +
-            '<button type="submit" class="btn-primary block" ' + (state.authBusy ? "disabled" : "") + '>' +
-              (state.authBusy ? icon("loader", "spin-sm") : "") + "Continua" +
-            '</button>' +
-          '</form>' +
-          '<div style="text-align:center;margin-top:1rem;"><button type="button" class="auth-link-btn" data-action="logout">Esci</button></div>' +
-        '</div>' +
-      '</div></div>';
-  }
-
-  function renderAuth() {
-    if (state.needUsername) return renderUsernameStep();
-    var mode = state.authMode;
-    var busy = state.authBusy ? "disabled" : "";
-    var seg = '<div class="seg">' +
-      '<button type="button" data-action="show-login" class="' + (mode === "login" ? "active" : "") + '">Accedi</button>' +
-      '<button type="button" data-action="show-register" class="' + (mode === "register" ? "active" : "") + '">Registrati</button>' +
-      '<button type="button" data-action="show-link" class="' + (mode === "link" ? "active" : "") + '">Link email</button>' +
-    '</div>';
-
-    var body;
-    if (mode === "link" && state.linkSentTo) {
-      body = '<div class="banner success">' + icon("check") + "<span>Ti abbiamo inviato un link a <strong>" + escapeHtml(state.linkSentTo) +
-        "</strong>. Aprilo da questo dispositivo per accedere (controlla anche nello spam).</span></div>" +
-        '<div style="text-align:center;"><button type="button" class="auth-link-btn" data-action="link-again">Usa un\'altra email</button></div>';
-    } else {
-      body = '<form id="auth-form" novalidate>' +
-        (mode === "link" ? '<p class="auth-hint">Inserisci la tua email: ti mandiamo un link per accedere, senza password. Se non hai ancora un account, verrà creato.</p>' : "") +
-        '<div class="field has-icon">' +
-          '<label for="auth-email">Email</label>' +
-          '<div class="field-icon-wrap">' + icon("mail") + '<input type="email" id="auth-email" name="email" placeholder="mario@esempio.it" autocomplete="email" value="' + escapeHtml(state.authEmail || "") + '" /></div>' +
-        '</div>' +
-        (mode !== "link" ?
-          '<div class="field has-icon">' +
-            '<label for="auth-password">Password</label>' +
-            '<div class="field-icon-wrap">' + icon("lock") + '<input type="password" id="auth-password" name="password" placeholder="••••••••" autocomplete="' + (mode === "login" ? "current-password" : "new-password") + '" /></div>' +
-          '</div>' : "") +
-        (mode === "register" ?
-          '<div class="field has-icon">' +
-            '<label for="auth-password2">Conferma password</label>' +
-            '<div class="field-icon-wrap">' + icon("lock") + '<input type="password" id="auth-password2" name="password2" placeholder="••••••••" autocomplete="new-password" /></div>' +
-          '</div>' : "") +
-        (state.authError ? '<div class="banner error">' + icon("alert-circle") + "<span>" + escapeHtml(state.authError) + "</span></div>" : "") +
-        '<button type="submit" class="btn-primary block" ' + busy + '>' +
-          (state.authBusy ? icon("loader", "spin-sm") : "") + (mode === "login" ? "Accedi" : mode === "register" ? "Crea account" : "Inviami il link") +
-        '</button>' +
-      '</form>';
-    }
-
-    return '' +
-      '<div class="auth-wrap"><div class="auth-box">' + renderAuthHeader() +
-        '<div class="auth-panel">' + seg + body +
-          '<div class="auth-divider"><span>oppure</span></div>' +
-          '<button type="button" class="btn-google" data-action="google-login" ' + busy + '>' + GOOGLE_G + 'Continua con Google</button>' +
-        '</div>' +
-        '<p class="auth-footnote">Account, inventari e scambi sono salvati online su Firebase e condivisi tra tutti gli utenti. Le password sono gestite da Firebase Authentication.</p>' +
-      '</div></div>';
-  }
-
-  function renderPhotoPicker() {
-    var photos = state.newItemPhotos || [];
-    var tiles = photos.map(function (src, idx) {
-      return '<div class="photo-preview"><img src="' + src + '" alt="Anteprima ' + (idx + 1) + '" />' +
-        '<button type="button" data-action="remove-photo" data-index="' + idx + '" class="photo-remove">' + icon("x") + "</button></div>";
-    }).join("");
-    var addTile = photos.length < MAX_ITEM_PHOTOS ?
-      '<label class="photo-drop">' + icon("image") + "<span>" + (photos.length === 0 ? "Carica" : "Aggiungi") + "</span>" +
-      '<input type="file" id="photo-input" accept="image/*" multiple style="display:none;" /></label>' : "";
-    return '<div class="photo-row">' + tiles + addTile + "</div>";
-  }
-
-  function renderAddItemModal() {
-    return '' +
-      '<div id="add-item-overlay" class="modal-overlay">' +
-        '<div class="modal-box">' +
-          '<div class="modal-head"><h3 class="display">Nuovo oggetto</h3><button data-action="close-add-item" class="icon-btn">' + icon("x") + "</button></div>" +
-          '<form id="add-item-form" novalidate>' +
-            '<div class="field">' +
-              '<label for="new-item-name">Nome oggetto</label>' +
-              '<input type="text" id="new-item-name" maxlength="40" placeholder="Es. Carta rara, Vinile, Figurina..." value="' + escapeHtml(state.newItemName || "") + '" />' +
-            "</div>" +
-            '<div class="field">' +
-              "<label>Foto (opzionale, fino a " + MAX_ITEM_PHOTOS + ")</label>" +
-              renderPhotoPicker() +
-            "</div>" +
-            '<button type="submit" class="btn-primary block" ' + (state.addBusy ? "disabled" : "") + ">" +
-              (state.addBusy ? icon("loader", "spin-sm") : "") + "Aggiungi all'inventario" +
-            "</button>" +
-          "</form>" +
-        "</div>" +
-      "</div>";
-  }
-
-  /* barra di ricerca riusabile; il pulsante "x" compare solo quando c'e' del testo (classe has-value) */
-  function renderSearchBox(id, placeholder, value) {
-    return '<div class="search-box' + (value ? " has-value" : "") + '">' + icon("search") +
-      '<input type="search" id="' + id + '" placeholder="' + escapeHtml(placeholder) + '" autocomplete="off" autocapitalize="none" spellcheck="false" value="' + escapeHtml(value || "") + '" />' +
-      '<button type="button" class="search-clear" data-action="clear-search" data-target="' + id + '" title="Cancella ricerca" aria-label="Cancella ricerca">' + icon("x") + "</button></div>";
-  }
-  function syncSearchBox(input) {
-    var box = input.closest ? input.closest(".search-box") : null;
-    if (box) box.classList.toggle("has-value", !!input.value);
-  }
-  function clearSearch(id) {
-    var input = document.getElementById(id);
-    if (input) { input.value = ""; syncSearchBox(input); input.focus(); }
-    if (id === "inventory-search") { state.inventorySearch = ""; updateInventoryResults(); }
-    else if (id === "history-search") { state.historySearch = ""; state.historyLimit = HISTORY_PAGE; updateHistory(); }
-  }
-
-  /* inventario: piu' recenti prima; la ricerca ignora maiuscole e accenti */
-  function filteredInventory() {
-    var q = normalizeText(state.inventorySearch);
-    var items = state.myInventory.slice().reverse();
-    if (!q) return items;
-    return items.filter(function (i) { return normalizeText(i.name).indexOf(q) !== -1; });
-  }
-  function inventoryCountLabel(shown) {
-    var total = state.myInventory.length, noun = " oggett" + (total === 1 ? "o" : "i");
-    return (normalizeText(state.inventorySearch) && total > 0) ? shown + " di " + total + noun : total + noun;
-  }
-  function renderInventoryGrid(items) {
-    if (items.length === 0) {
-      return '<div class="empty-state">' + icon("search") + "<p>Nessun oggetto trovato per \u201c" + escapeHtml(state.inventorySearch.trim()) + "\u201d.</p></div>";
-    }
-    return '<div class="item-grid">' + items.map(function (item) {
-      var available = isAvailable(item);
-      return '<div class="item-tile' + (available ? "" : " unavailable") + '">' +
-        renderItemPhotoBlock(item, "mine", true) +
-        '<div class="item-label"><p title="' + escapeHtml(item.name) + '">' + escapeHtml(item.name) + "</p></div>" +
-        '<div class="item-avail-row"><label class="switch"><input type="checkbox" class="avail-toggle" data-id="' + item.id + '" ' + (available ? "checked" : "") + ' /><span class="slider"></span></label>' +
-          '<span class="avail-text">' + (available ? "Disponibile" : "Non disponibile") + "</span></div>" +
-        '<button class="item-delete" data-action="delete-item" data-id="' + item.id + '" title="Rimuovi oggetto">' + icon("trash") + "</button>" +
-      "</div>";
-    }).join("") + "</div>";
-  }
-  /* aggiorna solo griglia e contatore mentre si digita: niente ridisegno dell'intera pagina, quindi il campo non perde il focus */
+  function syncSearchBox(el) { if (el && el.parentElement) { el.parentElement.classList.toggle("search-active", el.value.length > 0); } }
   function updateInventoryResults() {
-    var box = document.getElementById("inventory-results");
-    if (!box) { render(); return; }
-    var items = filteredInventory();
-    box.innerHTML = renderInventoryGrid(items);
-    var c = document.getElementById("inventory-count");
-    if (c) c.textContent = inventoryCountLabel(items.length);
+    var search = (state.inventorySearch || "").toLowerCase();
+    render();
   }
 
-  function renderInventoryTab() {
-    var count = state.myInventory.length, body, shown = 0;
-    if (state.invLoading) {
-      body = '<div class="spinner-wrap">' + icon("loader", "spin") + "</div>";
-    } else if (count === 0) {
-      body = '<div class="empty-state">' + icon("package") + "<p>Il tuo inventario è vuoto.</p><p class=\"sub\">Aggiungi il tuo primo oggetto per iniziare a scambiare.</p></div>";
-    } else {
-      var items = filteredInventory();
-      shown = items.length;
-      body = renderSearchBox("inventory-search", "Cerca nel tuo inventario", state.inventorySearch) +
-        '<div id="inventory-results">' + renderInventoryGrid(items) + "</div>";
-    }
-    return '<div class="section-head"><div><h2 class="display">Il mio inventario</h2><p class="section-sub" id="inventory-count">' + inventoryCountLabel(shown) + '</p></div>' +
-      '<button data-action="open-add-item" class="btn-primary">' + icon("plus") + " Aggiungi oggetto</button></div>" + body;
-  }
-
-  /* filtra la lista community in base al testo di ricerca (case-insensitive, sottostringa dello username) */
-  function filteredCommunityUsers() {
-    var q = (state.communitySearch || "").trim().toLowerCase();
-    if (!q) return state.communityUsers;
-    return state.communityUsers.filter(function (u) { return u.username.toLowerCase().indexOf(q) !== -1; });
-  }
-
-  function renderCommunityTab() {
-    var body, list = filteredCommunityUsers();
-    if (state.communityLoading) {
-      body = '<div class="spinner-wrap">' + icon("loader", "spin") + "</div>";
-    } else if (state.communityUsers.length === 0) {
-      body = '<div class="empty-state">' + icon("users") + "<p>Nessun altro utente registrato, per ora.</p></div>";
-    } else if (list.length === 0) {
-      body = '<div class="empty-state">' + icon("search") + "<p>Nessun utente trovato per \u201c" + escapeHtml(state.communitySearch) + "\u201d.</p></div>";
-    } else {
-      body = '<div class="user-list">' + list.map(function (u) {
-        return '<div class="user-row">' +
-          '<button class="user-row-main" data-action="open-user" data-username="' + escapeHtml(u.username) + '">' +
-            '<div class="left"><div class="avatar md">' + escapeHtml(u.username.charAt(0).toUpperCase()) + '</div>' +
-            '<div><p class="name">' + escapeHtml(u.username) + (friendStatusWith(u.username).kind === "friend" ? '<span class="badge accepted">Amico</span>' : "") + '</p><p class="count">' + u.count + " oggett" + (u.count === 1 ? "o" : "i") + "</p></div></div>" +
-            icon("chevron-left", "chevron") +
-          "</button>" +
-          '<div class="user-row-actions">' + friendActionButton(u.username) + "</div>" +
-        "</div>";
-      }).join("") + "</div>";
-    }
-    var searchBox =
-      '<div class="community-search">' + icon("search") +
-        '<input type="search" id="community-search" placeholder="Cerca un utente della community" autocomplete="off" autocapitalize="none" spellcheck="false" value="' + escapeHtml(state.communitySearch || "") + '" />' +
-      "</div>";
-    return '<div class="section-head"><div><h2 class="display">Community</h2><p class="section-sub">Sfoglia gli inventari degli altri utenti</p></div>' +
-      '<button data-action="refresh-community" class="btn-ghost">' + icon("refresh", state.communityLoading ? "spin-sm" : "") + " Aggiorna</button></div>" +
-      searchBox + body;
-  }
-
-  /* pulsante/stato amicizia mostrato nel profilo di un altro utente */
-  function friendActionButton(username) {
-    var st = friendStatusWith(username);
-    var busy = (state.friendAddBusy || (st.id && state.friendBusyId === st.id)) ? "disabled" : "";
-    if (st.kind === "friend") return '<span class="friend-pill">' + icon("user-check") + " Amici</span>";
-    if (st.kind === "sent") return '<button class="btn-ghost" disabled>' + icon("clock") + " Richiesta inviata</button>";
-    if (st.kind === "received") return '<button class="btn-ghost friend-accept" data-action="accept-friend" data-id="' + st.id + '" ' + busy + ">" + icon("check") + " Accetta richiesta</button>";
-    return '<button class="btn-ghost" data-action="add-friend" data-username="' + escapeHtml(username) + '" ' + busy + ">" + icon("user-plus") + " Aggiungi amico</button>";
-  }
-
-  function friendRequestCard(r, incoming) {
-    var name = incoming ? r.fromUser : r.toUser;
-    var busy = state.friendBusyId === r.id ? "disabled" : "";
-    var spin = state.friendBusyId === r.id;
-    var actions = incoming ?
-      '<button class="btn-accept" data-action="accept-friend" data-id="' + r.id + '" ' + busy + ">" + (spin ? icon("loader", "spin-sm") : icon("check")) + " Accetta</button>" +
-      '<button class="btn-decline" data-action="decline-friend" data-id="' + r.id + '" ' + busy + ">" + icon("x") + " Rifiuta</button>" :
-      '<button class="btn-ghost" data-action="cancel-friend-request" data-id="' + r.id + '" ' + busy + ">" + (spin ? icon("loader", "spin-sm") : icon("x")) + " Annulla</button>";
-    return '<div class="friend-card"><div class="who"><div class="avatar md">' + escapeHtml(name.charAt(0).toUpperCase()) + '</div>' +
-      '<div><p class="name">' + escapeHtml(name) + '</p><p class="sub">' + icon("clock") + " " + timeAgo(r.createdAt) + "</p></div></div>" +
-      '<div class="friend-actions">' + actions + "</div></div>";
-  }
-
-  function friendCard(f) {
-    var busy = state.friendBusyId === f.id ? "disabled" : "";
-    var since = f.since ? new Date(f.since).toLocaleDateString("it-IT", { day: "numeric", month: "short", year: "numeric" }) : "";
-    return '<div class="friend-card"><div class="who"><div class="avatar md">' + escapeHtml(f.username.charAt(0).toUpperCase()) + '</div>' +
-      '<div><p class="name">' + escapeHtml(f.username) + '</p>' + (since ? '<p class="sub">Amici dal ' + since + "</p>" : "") + "</div></div>" +
-      '<div class="friend-actions">' +
-        '<button class="btn-ghost" data-action="open-friend" data-username="' + escapeHtml(f.username) + '">' + icon("package") + " Inventario</button>" +
-        '<button class="icon-btn" data-action="remove-friend" data-id="' + f.id + '" data-username="' + escapeHtml(f.username) + '" title="Rimuovi dagli amici" ' + busy + ">" + icon("x") + "</button>" +
-      "</div></div>";
-  }
-
-  function renderFriendsTab() {
-    var inc = state.incomingFriendReqs, out = state.outgoingFriendReqs, fr = state.friends, body;
-    if (state.friendsLoading) {
-      body = '<div class="spinner-wrap">' + icon("loader", "spin") + "</div>";
-    } else {
-      body = "";
-      if (inc.length > 0) {
-        body += '<section class="trade-section"><h3>' + icon("inbox") + " Richieste ricevute (" + inc.length + ')</h3><div class="user-list">' +
-          inc.map(function (r) { return friendRequestCard(r, true); }).join("") + "</div></section>";
-      }
-      if (out.length > 0) {
-        body += '<section class="trade-section"><h3>' + icon("send") + " Richieste inviate (" + out.length + ')</h3><div class="user-list">' +
-          out.map(function (r) { return friendRequestCard(r, false); }).join("") + "</div></section>";
-      }
-      body += '<section class="trade-section"><h3>' + icon("users") + " I tuoi amici " + (fr.length > 0 ? "(" + fr.length + ")" : "") + "</h3>" +
-        (fr.length === 0 ?
-          '<div class="empty-state">' + icon("users") + "<p>Non hai ancora amici.</p><p class=\"sub\">Invia una richiesta con lo username, oppure dalla scheda Community.</p></div>" :
-          '<div class="user-list">' + fr.map(friendCard).join("") + "</div>") +
-        "</section>";
-    }
-    return '<div class="section-head"><div><h2 class="display">Amici</h2><p class="section-sub">Aggiungi altri collezionisti e ritrova subito i loro inventari</p></div>' +
-      '<button data-action="refresh-friends" class="btn-ghost">' + icon("refresh", state.friendsLoading ? "spin-sm" : "") + " Aggiorna</button></div>" +
-      '<form id="add-friend-form" class="friend-add" novalidate>' +
-        '<div class="field has-icon"><label for="friend-username">Aggiungi con lo username</label>' +
-          '<div class="field-icon-wrap">' + icon("user-plus") + '<input type="text" id="friend-username" placeholder="mario_rossi" maxlength="20" autocomplete="off" autocapitalize="none" spellcheck="false" value="' + escapeHtml(state.friendInput || "") + '" /></div></div>' +
-        '<button type="submit" class="btn-primary" ' + (state.friendAddBusy ? "disabled" : "") + ">" +
-          (state.friendAddBusy ? icon("loader", "spin-sm") : "") + "Invia richiesta</button>" +
-      "</form>" + body;
-  }
-
-  function renderTradeBuilder() {
-    var offerable = state.myInventory.filter(isAvailable);
+  /* ============ render ============ */
+  function renderAddItemModal() {
+    var photos = state.newItemPhotos;
     return '' +
-      '<div class="builder-head"><p class="text-dim" style="font-size:.875rem;margin:0;">Seleziona cosa vuoi e cosa offri</p>' +
-      '<button data-action="cancel-trade-builder" class="link-btn" style="font-size:.75rem;">Annulla</button></div>' +
-      '<div class="builder-cols">' +
-        '<div class="builder-col"><h3>' + icon("gift", "text-brass") + " Vuoi da " + escapeHtml(state.selectedUser) +
-          ' <span class="text-dim" style="font-weight:400;">(' + state.wantIds.length + ")</span></h3>" +
-          '<div class="pick-grid">' + state.otherInventory.map(function (item) {
-            var picked = state.wantIds.indexOf(item.id) !== -1;
-            return '<button type="button" class="pick-tile ' + (picked ? "picked-want" : "") + '" data-action="toggle-want" data-id="' + item.id + '">' +
-              renderItemPhotoBlock(item, "other", false) +
-              "<p>" + escapeHtml(item.name) + "</p>" +
-              (picked ? '<span class="pick-check" style="background:var(--brass);color:var(--brass-ink);">' + icon("check") + "</span>" : "") +
-              "</button>";
-          }).join("") + "</div></div>" +
-        '<div class="builder-col"><h3>' + icon("package", "text-verdigris") + ' Offri tu <span class="text-dim" style="font-weight:400;">(' + state.offerIds.length + ")</span></h3>" +
-          (offerable.length === 0 ? '<p class="empty-inline">Non hai oggetti disponibili da offrire. Segna un oggetto come "disponibile" dal tuo inventario.</p>' :
-          '<div class="pick-grid">' + offerable.map(function (item) {
-            var picked = state.offerIds.indexOf(item.id) !== -1;
-            return '<button type="button" class="pick-tile ' + (picked ? "picked-offer" : "") + '" data-action="toggle-offer" data-id="' + item.id + '">' +
-              renderItemPhotoBlock(item, "mine", false) +
-              "<p>" + escapeHtml(item.name) + "</p>" +
-              (picked ? '<span class="pick-check" style="background:var(--verdigris);color:var(--ink);">' + icon("check") + "</span>" : "") +
-              "</button>";
-          }).join("") + "</div>") +
-        "</div>" +
-      "</div>" +
-      '<button data-action="submit-trade" class="btn-primary" style="margin-top:1.25rem;" ' + (state.tradeBusy || state.wantIds.length === 0 || state.offerIds.length === 0 ? "disabled" : "") + ">" +
-        (state.tradeBusy ? icon("loader", "spin-sm") : "") + icon("send") + " Invia proposta di scambio</button>";
+      '<div id="add-item-overlay" class="modal-overlay"></div>' +
+      '<div class="modal">' +
+      '<div class="modal-header"><h2>Aggiungi Oggetto</h2><button type="button" data-action="close-add-item" class="btn-close">' + icon("x") + '</button></div>' +
+      '<form id="add-item-form" class="modal-body">' +
+      '<div class="field"><label>Nome</label><input id="new-item-name" type="text" placeholder="Es: Bicicletta blu" value="' + escapeHtml(state.newItemName) + '"/></div>' +
+      '<div class="photos-section"><label>Foto (' + photos.length + '/' + MAX_ITEM_PHOTOS + ')</label>' +
+      '<div class="photos-grid">' + photos.map(function (p, idx) { return '<div class="photo-thumb" style="background-image:url(' + p + ')"><button type="button" data-action="remove-photo" data-index="' + idx + '" class="btn-remove-photo">' + icon("x") + '</button></div>'; }).join("") +
+      (photos.length < MAX_ITEM_PHOTOS ? '<label class="photo-upload"><input type="file" id="photo-input" accept="image/*" style="display:none"/>' + icon("image") + ' Carica foto</label>' : '') +
+      '</div></div>' +
+      '<div class="modal-footer"><button type="submit" class="btn-primary block">Aggiungi</button></div>' +
+      '</form></div>';
   }
 
-  function renderOtherUserView() {
-    var count = state.otherInventory.length, body;
-    if (state.otherLoading) {
-      body = '<div class="spinner-wrap">' + icon("loader", "spin") + "</div>";
-    } else if (count === 0) {
-      var emptyMsg = state.otherInventoryTotal > 0 ?
-        " non ha oggetti disponibili per lo scambio al momento." :
-        " non ha ancora oggetti nell'inventario.";
-      body = '<div class="empty-state">' + icon("package") + "<p>" + escapeHtml(state.selectedUser) + emptyMsg + "</p></div>";
-    } else if (state.showTradeBuilder) {
-      body = renderTradeBuilder();
-    } else {
-      body = '<div class="item-grid">' + state.otherInventory.map(function (item) {
-        return '<div class="item-tile">' + renderItemPhotoBlock(item, "other", true) +
-          '<div class="item-label"><p title="' + escapeHtml(item.name) + '">' + escapeHtml(item.name) + "</p></div></div>";
-      }).join("") + "</div>";
-    }
-    return '<button data-action="back-to-community" class="link-btn" style="margin-bottom:1.25rem;">' + icon("chevron-left") + " Torna alla community</button>" +
-      '<div class="section-head"><div><h2 class="display">Inventario di ' + escapeHtml(state.selectedUser) + '</h2><p class="section-sub">' + count + " oggett" + (count === 1 ? "o" : "i") + "</p></div>" +
-      (!state.showTradeBuilder ? '<div class="head-actions">' + friendActionButton(state.selectedUser) +
-        (count > 0 ? '<button data-action="open-trade-builder" class="btn-primary">' + icon("swap") + " Proponi scambio</button>" : "") + "</div>" : "") +
-      "</div>" + body;
-  }
-
-  function statusBadge(status) {
-    var map = {
-      pending: { text: "In attesa", cls: "pending" }, accepted: { text: "Accettato", cls: "accepted" },
-      declined: { text: "Rifiutato", cls: "declined" }, cancelled: { text: "Annullato", cls: "cancelled" },
-      failed: { text: "Non riuscito", cls: "declined" }
-    };
-    var s = map[status] || map.cancelled;
-    return '<span class="badge ' + s.cls + '">' + s.text + "</span>";
-  }
-
-  function tradeItemsRow(items, label, colorClass) {
-    return '<div><p class="label ' + colorClass + '">' + label + '</p><div class="chip-row">' + items.map(function (it) {
-      var photos = itemPhotos(it);
-      return '<div class="chip"><div class="thumb">' + (photos.length ? '<img src="' + photos[0] + '" alt="' + escapeHtml(it.name) + '" />' : icon("image")) + '</div>' +
-        '<span class="name">' + escapeHtml(it.name) + "</span></div>";
-    }).join("") + "</div></div>";
-  }
-
-  function tradeCard(trade) {
-    var p = getPerspective(trade, state.currentUser);
-    var busy = state.respondingId === trade.id;
-    var whenTs = trade.status === "pending" ? trade.createdAt : historyDate(trade);
-    var actions = "";
-    if (trade.status === "pending" && !p.isFrom) {
-      actions = '<div class="trade-actions">' +
-        '<button class="btn-accept" data-action="accept-trade" data-id="' + trade.id + '" ' + (busy ? "disabled" : "") + ">" + (busy ? icon("loader", "spin-sm") : icon("check")) + " Accetta</button>" +
-        '<button class="btn-decline" data-action="decline-trade" data-id="' + trade.id + '" ' + (busy ? "disabled" : "") + ">" + icon("x") + " Rifiuta</button></div>";
-    } else if (trade.status === "pending" && p.isFrom) {
-      actions = '<button class="link-btn trade-cancel" data-action="cancel-outgoing-trade" data-id="' + trade.id + '" ' + (busy ? "disabled" : "") + ">" + (busy ? icon("loader", "spin-sm") : icon("x")) + " Annulla proposta</button>";
-    }
-    return '<div class="trade-card"><div class="head"><div class="who">' +
-      '<div class="avatar sm">' + escapeHtml(p.counterpart.charAt(0).toUpperCase()) + '</div>' +
-      '<div><p class="name">' + escapeHtml(p.counterpart) + '</p><p class="time" title="' + new Date(whenTs).toLocaleString("it-IT") + '">' + icon("clock") + " " + (trade.status === "pending" ? timeAgo(whenTs) : formatDate(whenTs)) + "</p></div></div>" +
-      statusBadge(trade.status) + "</div>" +
-      '<div class="trade-items">' + tradeItemsRow(p.receive, "Ricevi", "text-brass") + tradeItemsRow(p.give, "Dai", "text-verdigris") + "</div>" +
-      actions + "</div>";
-  }
-
-  /* ---- storico scambi ----
-     Con molti scambi mostriamo una pagina alla volta (HISTORY_PAGE), raggruppata per mese, con ricerca (utente o nome oggetto)
-     e filtro per stato. Come per l'inventario, mentre si digita si aggiorna solo il blocco dei risultati. */
-  var HISTORY_FILTERS = [
-    { id: "all", label: "Tutti" }, { id: "accepted", label: "Accettati" }, { id: "declined", label: "Rifiutati" },
-    { id: "cancelled", label: "Annullati" }, { id: "failed", label: "Non riusciti" }
-  ];
-  function historyDate(t) { return t.respondedAt || t.createdAt || 0; }
-  function monthKey(ts) { var d = new Date(ts); return d.getFullYear() + "-" + d.getMonth(); }
-  function monthLabel(ts) { return new Date(ts).toLocaleDateString("it-IT", { month: "long", year: "numeric" }); }
-
-  /* testo su cui cerca lo storico: controparte + nomi degli oggetti (calcolato una volta per scambio) */
-  function tradeSearchText(t) {
-    if (t._s === undefined) {
-      var names = toArray(t.offerItems).concat(toArray(t.requestItems)).map(function (i) { return i && i.name; });
-      t._s = normalizeText([getPerspective(t, state.currentUser).counterpart].concat(names).join("\n"));
-    }
-    return t._s;
-  }
-
-  function historyFiltered() {
-    var q = normalizeText(state.historySearch), f = state.historyFilter;
-    var matched = q ? state.historyTrades.filter(function (t) { return tradeSearchText(t).indexOf(q) !== -1; }) : state.historyTrades;
-    var counts = { all: matched.length };
-    matched.forEach(function (t) { counts[t.status] = (counts[t.status] || 0) + 1; });
-    return { list: f === "all" ? matched : matched.filter(function (t) { return t.status === f; }), counts: counts };
-  }
-
-  function renderHistoryChips(counts) {
-    return '<div class="filter-chips" role="group" aria-label="Filtra per stato">' +
-      HISTORY_FILTERS.filter(function (f) { return f.id === "all" || counts[f.id] || state.historyFilter === f.id; }).map(function (f) {
-        var active = state.historyFilter === f.id;
-        return '<button type="button" class="filter-chip' + (active ? " active" : "") + '" data-action="history-filter" data-filter="' + f.id + '" aria-pressed="' + active + '">' +
-          f.label + '<span class="chip-count">' + (counts[f.id] || 0) + "</span></button>";
-      }).join("") + "</div>";
-  }
-
-  function renderHistoryBody() {
-    var r = historyFiltered(), list = r.list, html = renderHistoryChips(r.counts);
-    if (list.length === 0) {
-      return html + '<div class="empty-state">' + icon("search") + "<p>Nessuno scambio trovato.</p><p class=\"sub\">Prova a cambiare ricerca o filtro.</p></div>";
-    }
-    var visible = list.slice(0, state.historyLimit), totals = {}, cur = null;
-    list.forEach(function (t) { var k = monthKey(historyDate(t)); totals[k] = (totals[k] || 0) + 1; });
-    visible.forEach(function (t) {
-      var k = monthKey(historyDate(t));
-      if (k !== cur) {
-        if (cur !== null) html += "</div>";
-        cur = k;
-        html += '<h4 class="history-month">' + monthLabel(historyDate(t)) + '<span class="month-count">' + totals[k] + '</span></h4><div class="trade-grid">';
-      }
-      html += tradeCard(t);
-    });
-    html += "</div>";
-    if (list.length > HISTORY_PAGE) {
-      var remaining = list.length - visible.length;
-      html += '<div class="history-more"><span class="history-shown">Mostrati ' + visible.length + " di " + list.length + "</span>" +
-        (remaining > 0 ? '<button type="button" class="btn-ghost" data-action="history-more">Mostra altri ' + Math.min(HISTORY_PAGE, remaining) + "</button>" : "") + "</div>";
-    }
-    return html;
-  }
-
-  function renderHistorySection() {
-    if (state.historyTrades.length === 0) return "";
-    return '<section class="trade-section history"><h3>' + icon("clock") + " Storico (" + state.historyTrades.length + ")</h3>" +
-      renderSearchBox("history-search", "Cerca per utente o oggetto", state.historySearch) +
-      '<div id="history-body">' + renderHistoryBody() + "</div></section>";
-  }
-
-  function updateHistory() {
-    var box = document.getElementById("history-body");
-    if (!box) { render(); return; }
-    /* se si stava usando un chip da tastiera, il focus torna su quello dopo il ridisegno */
-    var ae = document.activeElement;
-    var focusFilter = (ae && ae.getAttribute && ae.getAttribute("data-action") === "history-filter") ? ae.getAttribute("data-filter") : null;
-    box.innerHTML = renderHistoryBody();
-    if (focusFilter) { var nb = box.querySelector('[data-filter="' + focusFilter + '"]'); if (nb) nb.focus(); }
-  }
-
-  function renderTradesTab() {
-    var body;
-    if (state.tradesLoading) {
-      body = '<div class="spinner-wrap">' + icon("loader", "spin") + "</div>";
-    } else {
-      body = '<section class="trade-section"><h3>' + icon("inbox") + " Ricevute " + (state.incomingTrades.length > 0 ? "(" + state.incomingTrades.length + ")" : "") + "</h3>" +
-        (state.incomingTrades.length === 0 ? '<p class="none">Nessuna proposta ricevuta al momento.</p>' : '<div class="trade-grid">' + state.incomingTrades.map(tradeCard).join("") + "</div>") +
-        "</section>" +
-        '<section class="trade-section"><h3>' + icon("send") + " Inviate " + (state.outgoingTrades.length > 0 ? "(" + state.outgoingTrades.length + ")" : "") + "</h3>" +
-        (state.outgoingTrades.length === 0 ? '<p class="none">Nessuna proposta inviata al momento.</p>' : '<div class="trade-grid">' + state.outgoingTrades.map(tradeCard).join("") + "</div>") +
-        "</section>" +
-        renderHistorySection();
-    }
-    return '<div class="section-head"><h2 class="display">Scambi</h2><button data-action="refresh-trades" class="btn-ghost">' + icon("refresh", state.tradesLoading ? "spin-sm" : "") + " Aggiorna</button></div>" + body;
+  function renderEditItemModal() {
+    var photos = state.editItemPhotos;
+    return '' +
+      '<div id="add-item-overlay" class="modal-overlay"></div>' +
+      '<div class="modal">' +
+      '<div class="modal-header"><h2>Modifica Oggetto</h2><button type="button" data-action="close-edit-item" class="btn-close">' + icon("x") + '</button></div>' +
+      '<form id="edit-item-form" class="modal-body">' +
+      '<div class="field"><label>Nome</label><input id="edit-item-name" type="text" placeholder="Es: Bicicletta blu" value="' + escapeHtml(state.editItemName) + '"/></div>' +
+      '<div class="photos-section"><label>Foto (' + photos.length + '/' + MAX_ITEM_PHOTOS + ')</label>' +
+      '<div class="photos-grid">' + photos.map(function (p, idx) { return '<div class="photo-thumb" style="background-image:url(' + p + ')"><button type="button" data-action="remove-edit-photo" data-index="' + idx + '" class="btn-remove-photo">' + icon("x") + '</button></div>'; }).join("") +
+      (photos.length < MAX_ITEM_PHOTOS ? '<label class="photo-upload"><input type="file" id="photo-input-edit" accept="image/*" style="display:none"/>' + icon("image") + ' Carica foto</label>' : '') +
+      '</div></div>' +
+      '<div class="modal-footer"><button type="submit" class="btn-primary block">Salva Modifiche</button></div>' +
+      '</form></div>';
   }
 
   function renderLightbox() {
     if (!state.lightbox) return "";
-    var lb = state.lightbox;
-    var multi = lb.photos.length > 1;
-    return '<div id="lightbox-overlay" class="modal-overlay lightbox-overlay">' +
-      '<div class="lightbox-box">' +
-        '<button data-action="close-lightbox" class="icon-btn lightbox-close" title="Chiudi">' + icon("x") + "</button>" +
-        (multi ? '<button data-action="lightbox-prev" class="lightbox-nav prev" title="Foto precedente">' + icon("chevron-left") + "</button>" : "") +
-        '<img class="lightbox-img" src="' + lb.photos[lb.index] + '" alt="' + escapeHtml(lb.name) + '" />' +
-        (multi ? '<button data-action="lightbox-next" class="lightbox-nav next" title="Foto successiva">' + icon("chevron-left", "rotate-180") + "</button>" : "") +
-        (multi ? '<div class="lightbox-counter">' + (lb.index + 1) + " / " + lb.photos.length + "</div>" : "") +
-      "</div>" +
-    "</div>";
+    var lb = state.lightbox, p = lb.photos[lb.index];
+    return '' +
+      '<div id="lightbox-overlay" class="lightbox-overlay"></div>' +
+      '<div class="lightbox"><button type="button" data-action="lightbox-prev" class="lightbox-btn prev">' + icon("chevron-left") + '</button>' +
+      '<img src="' + escapeHtml(p) + '" alt="' + escapeHtml(lb.item.name) + '"/>' +
+      '<button type="button" data-action="lightbox-next" class="lightbox-btn next">' + icon("chevron-left") + '</button>' +
+      '<button type="button" data-action="close-lightbox" class="lightbox-close">' + icon("x") + '</button>' +
+      '<div class="lightbox-counter">' + (lb.index + 1) + '/' + lb.photos.length + '</div></div>';
+  }
+
+  function renderInventoryItem(item, isOwn) {
+    var av = isAvailable(item), photos = itemPhotos(item);
+    var html = '<div class="item-card ' + (av ? "" : "unavailable") + '">';
+    if (photos.length) { html += '<div class="item-photo" data-action="view-photos" data-id="' + escapeHtml(item.id) + '">' + (photos.length > 1 ? '<div class="photo-badge">' + photos.length + '</div>' : '') + '<img src="' + escapeHtml(photos[0]) + '" alt=""/></div>'; }
+    else { html += '<div class="item-photo-empty">' + icon("package") + '</div>'; }
+    html += '<div class="item-info"><div class="item-header"><h3>' + escapeHtml(item.name) + '</h3>';
+    if (isOwn) {
+      html += '<div class="item-actions">' +
+        '<button type="button" data-action="open-edit-item" data-id="' + escapeHtml(item.id) + '" class="btn-icon" title="Modifica">' + icon("edit") + '</button>' +
+        '<button type="button" data-action="delete-item" data-id="' + escapeHtml(item.id) + '" class="btn-icon" title="Elimina">' + icon("trash") + '</button>' +
+        '</div>';
+    }
+    html += '</div>';
+    if (isOwn) {
+      html += '<label class="avail-toggle"><input type="checkbox" data-id="' + escapeHtml(item.id) + '" ' + (av ? "checked" : "") + '><span>' + (av ? "Disponibile" : "Non disponibile") + '</span></label>';
+    }
+    html += '</div></div>';
+    return html;
+  }
+
+  function renderInventoryTab() {
+    var search = (state.inventorySearch || "").toLowerCase();
+    var filtered = state.inventory.filter(function (i) { return !search || i.name.toLowerCase().indexOf(search) !== -1; });
+    var html = '<div class="page-header"><h2>Il mio inventario</h2><button type="button" data-action="open-add-item" class="btn-primary">' + icon("plus") + ' Aggiungi</button></div>';
+    if (state.inventory.length === 0) {
+      html += '<div class="empty-state"><p>Nessun oggetto. Aggiungi il primo!</p></div>';
+    } else {
+      html += '<div class="search-box-wrap"><input type="text" id="inventory-search" placeholder="Cerca..." value="' + escapeHtml(state.inventorySearch) + '"/>' + (state.inventorySearch ? '<button type="button" data-action="clear-search" data-target="inventory" class="btn-clear">' + icon("x") + '</button>' : '') + '</div>';
+      html += '<div class="items-grid">' + filtered.map(function (item) { return renderInventoryItem(item, true); }).join("") + '</div>';
+      if (filtered.length === 0) { html += '<div class="empty-state"><p>Nessun risultato.</p></div>'; }
+    }
+    return html;
+  }
+
+  function renderCommunityTab() {
+    var search = (state.communitySearch || "").toLowerCase();
+    var filtered = state.community.filter(function (item) { return !search || item.name.toLowerCase().indexOf(search) !== -1; });
+    var html = '<div class="page-header"><h2>Community</h2></div>';
+    html += '<div class="search-box-wrap"><input type="text" id="community-search" placeholder="Cerca..." value="' + escapeHtml(state.communitySearch) + '"/>' + (state.communitySearch ? '<button type="button" data-action="clear-search" data-target="community" class="btn-clear">' + icon("x") + '</button>' : '') + '</div>';
+    if (state.community.length === 0) {
+      html += '<div class="empty-state"><p>Nessun oggetto disponibile al momento.</p></div>';
+    } else {
+      html += '<div class="items-grid">' + filtered.map(function (item) {
+        return '<div class="item-card" onclick="var action=event.target.closest(\'[data-action]\');if(action) return;' + "openUser('" + escapeHtml(item.user || "") + "');setState({tab:'community'});render();" + '">' +
+          (itemPhotos(item).length ? '<div class="item-photo"><img src="' + escapeHtml(itemPhotos(item)[0]) + '" alt=""/></div>' : '<div class="item-photo-empty">' + icon("package") + '</div>') +
+          '<div class="item-info"><div class="item-header"><h3>' + escapeHtml(item.name) + '</h3><span class="item-user">' + escapeHtml(item.user || "") + '</span></div></div></div>';
+      }).join("") + '</div>';
+      if (filtered.length === 0) { html += '<div class="empty-state"><p>Nessun risultato.</p></div>'; }
+    }
+    return html;
+  }
+
+  function renderOtherUserView() {
+    var html = '<div class="page-header"><button type="button" data-action="back-to-community" class="btn-icon-left">' + icon("chevron-left") + ' Indietro</button><h2>' + escapeHtml(state.selectedUser) + '</h2></div>';
+    if (state.otherUserInventory.length === 0) {
+      html += '<div class="empty-state"><p>Nessun oggetto disponibile.</p></div>';
+    } else {
+      html += '<div class="items-grid">' + state.otherUserInventory.filter(isAvailable).map(function (item) {
+        var sel = state.wantIds.indexOf(item.id) !== -1;
+        return '<div class="item-card ' + (sel ? "selected" : "") + '"><div class="item-select" data-action="toggle-want" data-id="' + escapeHtml(item.id) + '">' +
+          (itemPhotos(item).length ? '<div class="item-photo"><img src="' + escapeHtml(itemPhotos(item)[0]) + '" alt=""/></div>' : '<div class="item-photo-empty">' + icon("package") + '</div>') +
+          '<div class="select-check">' + icon("check") + '</div>' +
+          '</div><div class="item-info"><h3>' + escapeHtml(item.name) + '</h3></div></div>';
+      }).join("") + '</div>';
+      html += '<div class="trade-builder-btn"><button type="button" data-action="open-trade-builder" class="btn-primary block">' + icon("swap") + ' Proponi Scambio</button></div>';
+    }
+    if (state.showTradeBuilder) {
+      html += '<div class="trade-builder"><div class="trade-section"><h3>Voglio</h3><div class="items-list">' +
+        state.otherUserInventory.filter(isAvailable).map(function (item) {
+          var sel = state.wantIds.indexOf(item.id) !== -1;
+          return '<div class="trade-item ' + (sel ? "selected" : "") + '" data-action="toggle-want" data-id="' + escapeHtml(item.id) + '">' + escapeHtml(item.name) + (sel ? ' ' + icon("check") : "") + '</div>';
+        }).join("") +
+        '</div></div>' +
+        '<div class="trade-divider">' + icon("swap") + '</div>' +
+        '<div class="trade-section"><h3>Offro</h3><div class="items-list">' +
+        state.inventory.map(function (item) {
+          var sel = state.offerIds.indexOf(item.id) !== -1;
+          return '<div class="trade-item ' + (sel ? "selected" : "") + '" data-action="toggle-offer" data-id="' + escapeHtml(item.id) + '">' + escapeHtml(item.name) + (sel ? ' ' + icon("check") : "") + '</div>';
+        }).join("") +
+        '</div></div>' +
+        '<div class="trade-actions"><button type="button" data-action="cancel-trade-builder" class="btn-ghost">Annulla</button><button type="button" data-action="submit-trade" class="btn-primary">Invia Proposta</button></div></div>';
+    }
+    return html;
+  }
+
+  function renderFriendsTab() {
+    var incoming = state.friends.filter(function (f) { return f.status === "pending"; });
+    var outgoing = state.friends.filter(function (f) { return f.status === "outgoing"; });
+    var accepted = state.friends.filter(function (f) { return f.status === "accepted"; });
+    var html = '<div class="page-header"><h2>Amici</h2></div><form id="add-friend-form" class="friend-add"><div class="field"><label>Aggiungi amico</label><input id="friend-username" type="text" placeholder="Nome utente" value="' + escapeHtml(state.friendInput) + '"/></div><button type="submit" class="btn-primary">Aggiungi</button></form>';
+    if (incoming.length) { html += '<div class="section-title">Richieste in sospeso</div>' + incoming.map(function (r) { return '<div class="friend-card"><div class="who"><div>' + icon("user") + '</div><div><div class="name">' + escapeHtml(r.username || "") + '</div></div></div><div class="friend-actions"><button type="button" data-action="accept-friend" data-id="' + escapeHtml(r.id) + '" class="btn-ghost friend-accept">' + icon("user-check") + '</button><button type="button" data-action="decline-friend" data-id="' + escapeHtml(r.id) + '" class="btn-ghost">' + icon("x") + '</button></div></div>'; }).join(""); }
+    if (outgoing.length) { html += '<div class="section-title">Richieste inviate</div>' + outgoing.map(function (r) { return '<div class="friend-card"><div class="who"><div>' + icon("user") + '</div><div><div class="name">' + escapeHtml(r.username || "") + '</div></div></div><div class="friend-actions"><span class="pill-muted">In attesa</span><button type="button" data-action="cancel-friend-request" data-id="' + escapeHtml(r.id) + '" class="btn-ghost">' + icon("x") + '</button></div></div>'; }).join(""); }
+    if (accepted.length) { html += '<div class="section-title">Amici</div>' + accepted.map(function (f) { return '<div class="friend-card"><div class="who"><div>' + icon("user") + '</div><div><div class="name">' + escapeHtml(f.username || "") + '</div></div></div><div class="friend-actions"><button type="button" data-action="open-friend" data-username="' + escapeHtml(f.username || "") + '" class="btn-ghost">' + icon("inbox") + '</button><button type="button" data-action="remove-friend" data-id="' + escapeHtml(f.id) + '" data-username="' + escapeHtml(f.username || "") + '" class="btn-ghost">' + icon("x") + '</button></div></div>'; }).join(""); }
+    if (!incoming.length && !outgoing.length && !accepted.length) { html += '<div class="empty-state"><p>Nessun amico ancora. Inizia ad aggiungerne!</p></div>'; }
+    return html;
+  }
+
+  function renderTradesTab() {
+    var search = (state.historySearch || "").toLowerCase();
+    var html = '<div class="page-header"><h2>Scambi</h2><div class="trade-filters">' +
+      '<button type="button" data-action="history-filter" data-filter="completed" class="' + (state.historyFilter === "completed" ? "active" : "") + '">Completati</button>' +
+      '<button type="button" data-action="history-filter" data-filter="pending" class="' + (state.historyFilter === "pending" ? "active" : "") + '">In attesa</button>' +
+      '<button type="button" data-action="history-filter" data-filter="declined" class="' + (state.historyFilter === "declined" ? "active" : "") + '">Rifiutati</button>' +
+      '</div></div>';
+    html += '<div class="search-box-wrap"><input type="text" id="history-search" placeholder="Cerca..." value="' + escapeHtml(state.historySearch) + '"/>' + (state.historySearch ? '<button type="button" data-action="clear-search" data-target="history" class="btn-clear">' + icon("x") + '</button>' : '') + '</div>';
+    if (state.history.length === 0) { html += '<div class="empty-state"><p>Nessuno scambio ancora.</p></div>'; }
+    else { html += '<div class="trade-history">' + state.history.slice(0, state.historyLimit).map(function (t) { var isSender = sameUser(t.from, state.currentUser); return '<div class="trade-card ' + (t.accepted ? "accepted" : t.declined ? "declined" : "pending") + '"><div class="trade-header"><span>' + (isSender ? "A: " : "Da: ") + escapeHtml(isSender ? t.to : t.from) + '</span><span class="trade-status">' + (t.accepted ? "Accettato" : t.declined ? "Rifiutato" : "In attesa") + '</span></div></div>'; }).join("") + '</div>'; if (state.history.length >= state.historyLimit) { html += '<div class="load-more"><button type="button" data-action="history-more" class="btn-ghost">Carica altri...</button></div>'; } }
+    return html;
+  }
+
+  function renderAuth() {
+    if (state.needUsername) {
+      return '<div class="auth-wrap"><div class="auth-box"><div class="auth-header"><h1 class="display">Baratto</h1></div><div class="auth-panel"><p style="margin-bottom:1rem;">Scegli un nome utente:</p><form id="username-form"><div class="field"><input id="new-username" type="text" placeholder="3-20 caratteri, lettere/numeri/_" maxlength="20" value="' + escapeHtml(state.usernameInput) + '"/></div>' + (state.authError ? '<div class="banner error">' + icon("alert-circle") + '<span>' + escapeHtml(state.authError) + '</span></div>' : '') + '<button type="submit" class="btn-primary block">Continua</button></form></div></div></div>';
+    }
+    var segHtml = '<div class="seg"><button type="button" data-action="show-login" class="' + (state.authMode === "login" ? "active" : "") + '">Accedi</button><button type="button" data-action="show-register" class="' + (state.authMode === "register" ? "active" : "") + '">Registrati</button><button type="button" data-action="show-link" class="' + (state.authMode === "link" ? "active" : "") + '">Link Email</button></div>';
+    var formHtml = '';
+    if (state.linkSentTo) {
+      formHtml = '<div class="banner success">' + icon("check") + '<span>Link inviato a ' + escapeHtml(state.linkSentTo) + '. Controlla la posta.</span></div><button type="button" data-action="link-again" class="auth-link-btn">Invia un altro link</button>';
+    } else if (state.authMode === "link") {
+      formHtml = '<form id="auth-form"><div class="field"><label>Email</label><div class="field-icon-wrap"><input id="auth-email" type="email" placeholder="tua@email.com" value="' + escapeHtml(state.authEmail) + '"/><span class="icon">' + icon("mail") + '</span></div></div>' + (state.authError ? '<div class="banner error">' + icon("alert-circle") + '<span>' + escapeHtml(state.authError) + '</span></div>' : '') + '<button type="submit" class="btn-primary block">Invia Link</button></form>';
+    } else {
+      formHtml = '<form id="auth-form"><div class="field"><label>Email</label><div class="field-icon-wrap"><input id="auth-email" type="email" placeholder="tua@email.com" value="' + escapeHtml(state.authEmail) + '"/><span class="icon">' + icon("mail") + '</span></div></div><div class="field"><label>Password</label><div class="field-icon-wrap"><input id="auth-password" type="password" placeholder="Almeno 6 caratteri"/><span class="icon">' + icon("lock") + '</span></div></div>' + (state.authError ? '<div class="banner error">' + icon("alert-circle") + '<span>' + escapeHtml(state.authError) + '</span></div>' : '') + '<button type="submit" class="btn-primary block">' + (state.authMode === "login" ? "Accedi" : "Registrati") + '</button></form><div class="auth-divider">oppure</div><button type="button" data-action="google-login" class="btn-google"><svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="currentColor"/><path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="currentColor"/><path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="currentColor"/><path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="currentColor"/></svg>Google</button>';
+    }
+    return '<div class="auth-wrap"><div class="auth-box"><div class="auth-header"><h1 class="display">Baratto</h1><div class="ornament"><div class="line"></div><div class="dot"></div><div class="line"></div></div><p>Scambia oggetti con la comunità</p></div><div class="auth-panel">' + segHtml + formHtml + '</div><div class="auth-footnote">Creando un account accetti i nostri <a href="#" style="color:var(--brass);">Termini di Servizio</a></div></div></div>';
   }
 
   function renderApp() {
-    var navTabs = [
-      { id: "inventory", label: "Inventario", i: "package" },
-      { id: "community", label: "Community", i: "users" },
-      { id: "friends", label: "Amici", i: "user-plus", badge: state.incomingFriendReqs.length },
-      { id: "trades", label: "Scambi", i: "swap", badge: state.incomingTrades.length }
-    ];
-    var tabsHtml = navTabs.map(function (t) {
-      return '<button data-action="switch-tab" data-tab="' + t.id + '" class="tab-btn ' + (state.tab === t.id ? "active" : "") + '">' +
-        icon(t.i) + " " + t.label + (t.badge ? '<span class="tab-badge">' + t.badge + "</span>" : "") + "</button>";
-    }).join("");
-    var tabContent = "";
+    var tabsHtml = '<button type="button" data-action="switch-tab" data-tab="inventory" class="' + (state.tab === "inventory" ? "active" : "") + '">' + icon("package") + ' Inventario</button>' +
+      '<button type="button" data-action="switch-tab" data-tab="community" class="' + (state.tab === "community" ? "active" : "") + '">' + icon("users") + ' Community</button>' +
+      '<button type="button" data-action="switch-tab" data-tab="friends" class="' + (state.tab === "friends" ? "active" : "") + '">' + icon("user-plus") + ' Amici</button>' +
+      '<button type="button" data-action="switch-tab" data-tab="trades" class="' + (state.tab === "trades" ? "active" : "") + '">' + icon("swap") + ' Scambi</button>';
+    var tabContent = '';
     if (state.tab === "inventory") tabContent = renderInventoryTab();
     else if (state.tab === "community") tabContent = state.selectedUser ? renderOtherUserView() : renderCommunityTab();
     else if (state.tab === "friends") tabContent = renderFriendsTab();
@@ -1300,15 +673,18 @@
       (state.message ? '<div class="message-wrap"><div class="banner ' + state.message.type + '">' +
         icon(state.message.type === "error" ? "alert-circle" : "check") + "<span>" + escapeHtml(state.message.text) + "</span></div></div>" : "") +
       '<main class="main"><div class="content">' + tabContent + "</div></main>" +
-      (state.showAddItem ? renderAddItemModal() : "") + renderLightbox();
+      (state.showAddItem ? renderAddItemModal() : "") +
+      (state.showEditItem ? renderEditItemModal() : "") +
+      renderLightbox();
   }
+
+  function switchTab(tab) { setState({ tab: tab, selectedUser: null, otherUserInventory: [] }); render(); }
 
   function render() {
     if (state.booting) {
       document.getElementById("app").innerHTML = '<div class="auth-wrap"><div class="auth-box" style="text-align:center;">' + icon("loader", "spin-sm") + "</div></div>";
       return;
     }
-    /* alcuni campi (aggiungi amico, ricerca community) non devono perdere focus e cursore se la pagina si ridisegna mentre si scrive */
     var FOCUS_PRESERVE_IDS = ["friend-username", "community-search", "inventory-search", "history-search"];
     var active = document.activeElement;
     var keepFocusId = (active && FOCUS_PRESERVE_IDS.indexOf(active.id) !== -1) ? active.id : null;
@@ -1336,9 +712,15 @@
     else if (action === "switch-tab") { switchTab(t.dataset.tab); }
     else if (action === "open-add-item") { openAddItem(); }
     else if (action === "close-add-item") { state.showAddItem = false; render(); }
+    else if (action === "open-edit-item") { var itemId = t.dataset.id; var item = getItemById(itemId, state.inventory); if (item) openEditItem(item); }
+    else if (action === "close-edit-item") { closeEditItem(); }
     else if (action === "remove-photo") {
       var idx = parseInt(t.dataset.index, 10);
       if (!isNaN(idx)) { state.newItemPhotos.splice(idx, 1); render(); }
+    }
+    else if (action === "remove-edit-photo") {
+      var idx = parseInt(t.dataset.index, 10);
+      if (!isNaN(idx)) { state.editItemPhotos.splice(idx, 1); render(); }
     }
     else if (action === "delete-item") { deleteItem(t.dataset.id); }
     else if (action === "open-user") { openUser(t.dataset.username); }
@@ -1372,17 +754,20 @@
   document.addEventListener("submit", function (e) {
     if (e.target && e.target.id === "auth-form") handleAuthSubmit(e);
     else if (e.target && e.target.id === "add-item-form") submitNewItem(e);
+    else if (e.target && e.target.id === "edit-item-form") submitEditItem(e);
     else if (e.target && e.target.id === "username-form") handleClaimUsername(e);
     else if (e.target && e.target.id === "add-friend-form") handleAddFriendSubmit(e);
   });
 
   document.addEventListener("change", function (e) {
     if (e.target && e.target.id === "photo-input") handleFileChange(e);
+    else if (e.target && e.target.id === "photo-input-edit") handleFileChange(e);
     else if (e.target && e.target.classList.contains("avail-toggle")) toggleAvailable(e.target.dataset.id);
   });
 
   document.addEventListener("input", function (e) {
     if (e.target && e.target.id === "new-item-name") state.newItemName = e.target.value;
+    else if (e.target && e.target.id === "edit-item-name") state.editItemName = e.target.value;
     else if (e.target && e.target.id === "auth-email") state.authEmail = e.target.value;
     else if (e.target && e.target.id === "new-username") state.usernameInput = e.target.value;
     else if (e.target && e.target.id === "friend-username") state.friendInput = e.target.value;
@@ -1398,10 +783,24 @@
     else if (e.key === "ArrowRight") lightboxStep(1);
   });
 
+  /* ============ helper for auth password ============ */
+  document.addEventListener("input", function (e) {
+    if (e.target && e.target.id === "auth-password") state.authPassword = e.target.value;
+  });
+
+  /* ============ friend form submit ============ */
+  function handleAddFriendSubmit(e) {
+    e.preventDefault();
+    var username = (state.friendInput || "").trim();
+    if (!username) { setMessage("Inserisci un nome utente.", "error"); return; }
+    sendFriendRequest(username);
+    state.friendInput = "";
+    render();
+  }
+
   /* ============ avvio ============ */
   (function init() {
     render();
-    /* Firebase Auth ricorda la sessione e notifica ogni accesso/uscita, con qualsiasi metodo */
     fbAuth.onAuthStateChanged(function (fbUser) {
       state.booting = false;
       if (!fbUser) { render(); return; }
