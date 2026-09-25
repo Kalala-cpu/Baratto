@@ -881,10 +881,42 @@
   function respondTrade(tradeId, accept) {
     dbGet("trades/" + tradeId).then(function (trade) {
       if (!trade) return;
-      trade.accepted = accept;
-      trade.declined = !accept;
-      return dbSet("trades/" + tradeId, trade);
-    }).then(function () { setMessage(accept ? "Scambio accettato!" : "Scambio rifiutato.", "success"); loadTrades(); }).catch(function (err) { setMessage("Errore: " + err.message, "error"); });
+      if (!accept) {
+        trade.accepted = false;
+        trade.declined = true;
+        return dbSet("trades/" + tradeId, trade);
+      }
+      var fromU = (trade.fromUser || trade.from || "").toLowerCase();
+      var toU = (trade.toUser || trade.to || "").toLowerCase();
+      var wantIds = toArray(trade.wantIds); /* oggetti di toU che passano a fromU */
+      var offerIds = toArray(trade.offerIds); /* oggetti di fromU che passano a toU */
+      /* accettare uno scambio deve spostare fisicamente gli oggetti tra i due inventari,
+         non solo segnare la proposta come accettata (vedi commento su "inventories" nelle
+         regole del DB, che apre la scrittura incrociata proprio per questo motivo) */
+      return Promise.all([getInventory(fromU), getInventory(toU)]).then(function (res) {
+        var fromInv = res[0], toInv = res[1];
+        var offerItems = offerIds.map(function (id) { return getItemById(id, fromInv); }).filter(Boolean);
+        var wantItems = wantIds.map(function (id) { return getItemById(id, toInv); }).filter(Boolean);
+        if (offerItems.length !== offerIds.length || wantItems.length !== wantIds.length) {
+          throw new Error("Alcuni oggetti coinvolti non sono più disponibili: lo scambio non può essere completato.");
+        }
+        return updateInventory(fromU, function (inv) {
+          return inv.filter(function (it) { return offerIds.indexOf(it.id) === -1; }).concat(wantItems);
+        }).then(function () {
+          return updateInventory(toU, function (inv) {
+            return inv.filter(function (it) { return wantIds.indexOf(it.id) === -1; }).concat(offerItems);
+          });
+        });
+      }).then(function () {
+        trade.accepted = true;
+        trade.declined = false;
+        return dbSet("trades/" + tradeId, trade);
+      });
+    }).then(function () {
+      setMessage(accept ? "Scambio accettato!" : "Scambio rifiutato.", "success");
+      loadTrades();
+      loadInventory();
+    }).catch(function (err) { setMessage("Errore: " + err.message, "error"); });
   }
 
   function cancelTrade(tradeId) {
