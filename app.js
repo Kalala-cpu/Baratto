@@ -202,6 +202,11 @@
     showChatTradeBuilder: false,
     pendingChatMedia: null,
     chatMediaSending: false,
+    showDeleteAccountConfirm: false,
+    tradeDuration: "",
+    historyUserFilter: "",
+    historyDateFrom: "",
+    historyDateTo: "",
     installAvailable: false,
     isOffline: (typeof navigator !== "undefined" && "onLine" in navigator) ? !navigator.onLine : false
   };
@@ -506,15 +511,21 @@
         showChatTradeBuilder: false,
         otherUserSearch: "",
         pendingChatMedia: null,
-        chatMediaSending: false
+        chatMediaSending: false,
+        showDeleteAccountConfirm: false
       });
       render();
     });
   }
 
   /* ============ eliminazione account ============ */
+  /* popup di conferma "vero" (modale dell'app) al posto del confirm() nativo del
+     browser, troppo facile da chiudere/confermare per errore per un'azione così
+     distruttiva e irreversibile */
+  function openDeleteAccountConfirm() { setState({ showDeleteAccountConfirm: true }); render(); }
+  function closeDeleteAccountConfirm() { setState({ showDeleteAccountConfirm: false }); render(); }
   function deleteAccount() {
-    if (!confirm("Eliminare definitivamente il tuo account? L'azione non può essere annullata.")) return;
+    setState({ showDeleteAccountConfirm: false });
     performAccountDeletion(false);
   }
   function performAccountDeletion(isRetry) {
@@ -1501,6 +1512,17 @@
       '</form></div>';
   }
 
+  function renderDeleteAccountModal() {
+    return '<div id="delete-account-overlay" class="modal-overlay" data-action="close-delete-account-confirm"></div>' +
+      '<div class="modal">' +
+      '<div class="modal-header"><h2>Eliminare l\'account?</h2><button type="button" data-action="close-delete-account-confirm" class="btn-close">' + icon("x") + '</button></div>' +
+      '<div class="modal-body">' +
+      '<div class="banner error">' + icon("alert-circle") + '<span>Questa azione è definitiva e non può essere annullata: verranno eliminati il profilo, l\'inventario, la lista amici e l\'accesso di <strong>' + escapeHtml(state.currentUser) + '</strong>. Gli scambi e i messaggi già scambiati con altri utenti potrebbero restare visibili a loro.</span></div>' +
+      '</div>' +
+      '<div class="modal-footer"><div class="trade-actions"><button type="button" data-action="close-delete-account-confirm" class="btn-ghost">Annulla</button><button type="button" data-action="confirm-delete-account" class="btn-danger">' + icon("trash") + ' Elimina definitivamente</button></div></div>' +
+      '</div>';
+  }
+
   function renderChatTradeModal() {
     var otherItems = state.chatOtherInventory.filter(isAvailable);
     return '<div id="chat-trade-overlay" class="modal-overlay" data-action="close-chat-trade"></div>' +
@@ -1604,7 +1626,7 @@
         '<div class="header-right">' +
         (state.installAvailable ? '<button data-action="install-app" class="btn-ghost" title="Installa l\'app">' + icon("package") + ' Installa</button>' : '') +
         '<button type="button" data-action="go-profile" class="profile-btn" title="Il mio inventario">' + icon("user") + '<span class="greet">Ciao, <strong>' + escapeHtml(state.currentUser) + '</strong></span></button>' +
-        '<button data-action="delete-account" class="btn-ghost" title="Elimina account">' + icon("trash") + '</button>' +
+        '<button data-action="open-delete-account-confirm" class="btn-ghost" title="Elimina account">' + icon("trash") + '</button>' +
         '<button data-action="logout" class="btn-ghost">' + icon("logout") + " Esci</button></div></div>" +
         '<div class="tab-nav">' + tabsHtml + "</div></header>" +
       (state.message ? '<div class="message-wrap"><div class="banner ' + state.message.type + '">' +
@@ -1612,6 +1634,7 @@
       '<main class="main"><div class="content">' + tabContent + "</div></main>" +
       (state.showAddItem ? renderAddItemModal() : "") +
       (state.showEditItem ? renderEditItemModal() : "") +
+      (state.showDeleteAccountConfirm ? renderDeleteAccountModal() : "") +
       renderLightbox();
   }
 
@@ -1662,17 +1685,39 @@
     var active = document.activeElement;
     var keepFocusId = (active && FOCUS_PRESERVE_IDS.indexOf(active.id) !== -1) ? active.id : null;
     var selStart = keepFocusId ? active.selectionStart : null, selEnd = keepFocusId ? active.selectionEnd : null;
+    /* ogni render() ricostruisce l'intero #app da zero (innerHTML), quindi qualunque
+       elemento scrollabile perderebbe la propria posizione di scroll ad ogni singolo
+       aggiornamento di stato (es. aprire il modale "Scambio" in chat, o qualunque altra
+       azione), anche quando non c'entra nulla con quell'elemento. Salviamo qui le
+       posizioni prima della sostituzione e le ripristiniamo subito dopo. */
+    var chatEl = document.getElementById("chat-messages");
+    var chatScroll = null;
+    if (chatEl) {
+      var atBottom = (chatEl.scrollHeight - chatEl.scrollTop - chatEl.clientHeight) < 40;
+      chatScroll = { top: chatEl.scrollTop, atBottom: atBottom };
+    }
     document.getElementById("app").innerHTML = renderOfflineBanner() + (state.currentUser ? renderApp() : renderAuth());
     if (keepFocusId) {
       var el = document.getElementById(keepFocusId);
       if (el) { el.focus(); try { el.setSelectionRange(selStart, selEnd); } catch (err) {} }
     }
+    if (chatScroll) {
+      var newChatEl = document.getElementById("chat-messages");
+      if (newChatEl) { newChatEl.scrollTop = chatScroll.atBottom ? newChatEl.scrollHeight : chatScroll.top; }
+    }
+    /* la barra delle tab (.tab-nav) scorre in orizzontale su schermi stretti: senza
+       questo, cliccare una tab la ricreava sempre scrollata all'inizio, "nascondendo"
+       la tab appena selezionata se non era la prima */
+    var activeTabBtn = document.querySelector(".tab-nav button.active");
+    if (activeTabBtn && activeTabBtn.scrollIntoView) { activeTabBtn.scrollIntoView({ block: "nearest", inline: "nearest" }); }
   }
 
   /* ============ gestione eventi (delegazione) ============ */
   document.addEventListener("click", function (e) {
     if (e.target && e.target.id === "add-item-overlay") { state.showAddItem = false; render(); return; }
-    if (e.target && e.target.id === "lightbox-overlay") { closeLightbox(); return; }
+    /* chiudi il lightbox anche cliccando fuori dalla foto/video (non solo sull'overlay,
+       che di fatto e' sempre coperto dal contenitore .lightbox a schermo intero) */
+    if (e.target && (e.target.id === "lightbox-overlay" || e.target.classList.contains("lightbox"))) { closeLightbox(); return; }
     var t = e.target.closest("[data-action]");
     if (!t) return;
     var action = t.dataset.action;
@@ -1683,7 +1728,9 @@
     else if (action === "link-again") { state.linkSentTo = null; render(); }
     else if (action === "google-login") { handleGoogle(); }
     else if (action === "logout") { handleLogout(); }
-    else if (action === "delete-account") { deleteAccount(); }
+    else if (action === "open-delete-account-confirm") { openDeleteAccountConfirm(); }
+    else if (action === "close-delete-account-confirm") { closeDeleteAccountConfirm(); }
+    else if (action === "confirm-delete-account") { deleteAccount(); }
     else if (action === "switch-tab") { switchTab(t.dataset.tab); }
     else if (action === "open-add-item") { openAddItem(); }
     else if (action === "close-add-item") { state.showAddItem = false; render(); }
@@ -1889,7 +1936,8 @@
           showChatTradeBuilder: false,
           otherUserSearch: "",
           pendingChatMedia: null,
-          chatMediaSending: false
+          chatMediaSending: false,
+          showDeleteAccountConfirm: false
         });
         render();
         return;

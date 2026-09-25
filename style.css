@@ -340,6 +340,23 @@ input { font-family: inherit; }
 }
 .btn-ghost:hover { background: var(--brass-light); border-color: var(--brass-light); }
 
+.btn-danger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  background: var(--red);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 0.65rem 1.1rem;
+  font-weight: 600;
+  font-size: 0.92rem;
+  transition: background 0.15s, transform 0.1s;
+}
+.btn-danger:hover { background: #8f2f2f; }
+.btn-danger:active { transform: scale(0.98); }
+
 .btn-icon {
   display: inline-flex;
   align-items: center;
