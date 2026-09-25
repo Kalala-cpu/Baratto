@@ -615,6 +615,42 @@ input { font-family: inherit; }
 
 .item-actions { display: flex; gap: 0.15rem; flex-shrink: 0; }
 
+/* etichetta sulla miniatura dell'oggetto che, essendo il primo disponibile in
+   inventario, e' quello usato come immagine profilo nella community */
+.item-profile-badge {
+  position: absolute;
+  top: 0.4rem;
+  left: 0.4rem;
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+  background: var(--brass);
+  color: #fff;
+  font-size: 0.65rem;
+  font-weight: 700;
+  border-radius: 999px;
+  padding: 0.1rem 0.45rem 0.1rem 0.35rem;
+  z-index: 2;
+}
+.item-profile-badge .icon { width: 0.65rem; height: 0.65rem; }
+
+/* riordino della posizione dell'oggetto in inventario */
+.item-reorder { display: flex; justify-content: space-between; gap: 0.4rem; margin-top: 0.5rem; }
+.btn-move-item {
+  display: flex;
+  align-items: center;
+  gap: 0.15rem;
+  border: 1px solid var(--line);
+  background: var(--cream);
+  color: var(--ink-soft);
+  font-size: 0.7rem;
+  font-weight: 600;
+  border-radius: 999px;
+  padding: 0.15rem 0.5rem;
+}
+.btn-move-item:hover { border-color: var(--brass); color: var(--brass-dark); background: var(--brass-light); }
+.btn-move-item .icon { width: 0.65rem; height: 0.65rem; }
+
 .avail-toggle {
   display: flex;
   align-items: center;
