@@ -182,6 +182,7 @@
     communitySearch: "",
     selectedUser: null,
     otherUserInventory: [],
+    otherUserSearch: "",
     historyFilter: "completed",
     historyLimit: HISTORY_PAGE,
     historySearch: "",
@@ -198,7 +199,10 @@
     chatMessages: [],
     chatInput: "",
     chatOtherInventory: [],
-    showChatTradeBuilder: false
+    showChatTradeBuilder: false,
+    pendingChatMedia: null,
+    chatMediaSending: false,
+    installAvailable: false
   };
 
   function setState(changes) { Object.assign(state, changes); }
@@ -452,6 +456,7 @@
   function handleLogout() {
     detachChat();
     fbAuth.signOut().then(function () {
+      setHash("");
       setState({
         currentUser: "",
         needUsername: false,
@@ -496,7 +501,10 @@
         chatMessages: [],
         chatInput: "",
         chatOtherInventory: [],
-        showChatTradeBuilder: false
+        showChatTradeBuilder: false,
+        otherUserSearch: "",
+        pendingChatMedia: null,
+        chatMediaSending: false
       });
       render();
     });
@@ -565,7 +573,7 @@
   function resolveProfile(fbUser) {
     dbGet("profiles/" + fbUser.uid).then(function (profile) {
       var uname = profile && profile.username;
-      if (uname) { setState({ currentUser: uname }); loadInventory(); loadCommunity(); loadFriends(); loadTrades(); loadGroups(); }
+      if (uname) { setState({ currentUser: uname }); loadInventory(); loadCommunity(); loadFriends(); loadTrades(); loadGroups(); restoreFromHash(); }
       else { setState({ needUsername: true, usernameInput: "" }); }
       render();
     }).catch(function (err) {
@@ -647,8 +655,8 @@
     return f ? f.status : null;
   }
 
-  function openUser(username) { setState({ selectedUser: username, otherUserInventory: [], tab: "community" }); getInventory(username.toLowerCase()).then(function (inv) { setState({ otherUserInventory: inv }); render(); }); render(); }
-  function backToCommunity() { setState({ selectedUser: null, otherUserInventory: [] }); render(); }
+  function openUser(username) { setState({ selectedUser: username, otherUserInventory: [], otherUserSearch: "", tab: "community" }); getInventory(username.toLowerCase()).then(function (inv) { setState({ otherUserInventory: inv }); render(); }); render(); setHash("community/" + encodeURIComponent(username)); }
+  function backToCommunity() { setState({ selectedUser: null, otherUserInventory: [], otherUserSearch: "" }); render(); setHash("community"); }
   function openFriend(username) { openUser(username); setState({ tab: "community" }); render(); }
 
   /* ============ chat (privata e di gruppo) ============ */
@@ -667,6 +675,13 @@
   function detachChat() {
     if (chatRef) { chatRef.off("value"); chatRef = null; }
   }
+  /* scarta un eventuale allegato in attesa di conferma: va chiamata ogni volta che
+     cambia la chat attiva, altrimenti una foto/video scelto per una conversazione
+     potrebbe finire inviato per sbaglio a un'altra se l'utente cambia chat prima di confermare */
+  function clearPendingChatMedia() {
+    if (state.pendingChatMedia && state.pendingChatMedia.previewUrl) { URL.revokeObjectURL(state.pendingChatMedia.previewUrl); }
+    state.pendingChatMedia = null;
+  }
   function attachChatRef() {
     var path = chatMessagesPath();
     if (!path) return;
@@ -683,19 +698,23 @@
   function openChat(username) {
     if (!username) return;
     detachChat();
+    clearPendingChatMedia();
     setState({ tab: "chat", chatTarget: { type: "friend", id: username, name: username }, chatMessages: [], chatInput: "", chatOtherInventory: [], showChatTradeBuilder: false });
     render();
     attachChatRef();
+    setHash("chat/" + encodeURIComponent(username));
   }
   function openGroupChat(groupId) {
     var group = getItemById(groupId, state.groups);
     if (!group) return;
     detachChat();
-    setState({ tab: "chat", chatTarget: { type: "group", id: group.id, name: group.name, members: toArray(group.members) }, chatMessages: [], chatInput: "" });
+    clearPendingChatMedia();
+    setState({ tab: "chat", chatTarget: { type: "group", id: group.id, name: group.name, members: toArray(group.members) }, chatMessages: [], chatInput: "", showChatTradeBuilder: false });
     render();
     attachChatRef();
+    setHash("chat");
   }
-  function closeChat() { detachChat(); setState({ chatTarget: null, chatMessages: [], chatInput: "", showChatTradeBuilder: false }); render(); }
+  function closeChat() { detachChat(); clearPendingChatMedia(); setState({ chatTarget: null, chatMessages: [], chatInput: "", showChatTradeBuilder: false }); render(); setHash("chat"); }
   function scrollChatToBottom() {
     setTimeout(function () {
       var el = document.getElementById("chat-messages");
@@ -715,30 +734,57 @@
       setMessage(dbErrorMessage(err, "Errore invio: " + err.message), "error");
     });
   }
-  /* invio di una foto o di un video in chat */
+  /* selezione di una foto o di un video da inviare in chat: NON viene inviato subito.
+     Viene solo preparata un'anteprima (state.pendingChatMedia); l'invio vero parte
+     solo quando l'utente conferma con confirmSendChatMedia() */
   function handleChatMediaChange(e) {
     var file = e.target.files && e.target.files[0];
     e.target.value = "";
+    if (!file) return;
+    var isImg = file.type && file.type.indexOf("image/") === 0;
+    var isVid = file.type && file.type.indexOf("video/") === 0;
+    if (!isImg && !isVid) { setMessage("Seleziona un'immagine o un video.", "error"); return; }
+    if (state.pendingChatMedia && state.pendingChatMedia.previewUrl) { URL.revokeObjectURL(state.pendingChatMedia.previewUrl); }
+    var previewUrl = URL.createObjectURL(file);
+    setState({ pendingChatMedia: { file: file, previewUrl: previewUrl, type: isVid ? "video" : "image" } });
+    render();
+  }
+  /* annulla l'allegato in attesa: niente viene inviato */
+  function cancelChatMedia() {
+    if (state.pendingChatMedia && state.pendingChatMedia.previewUrl) { URL.revokeObjectURL(state.pendingChatMedia.previewUrl); }
+    setState({ pendingChatMedia: null });
+    render();
+  }
+  /* invio effettivo dell'allegato, solo dopo conferma esplicita dell'utente */
+  function confirmSendChatMedia() {
+    var pending = state.pendingChatMedia;
     var path = chatMessagesPath();
-    if (!file || !path) return;
-    var msgId = genId();
-    if (file.type && file.type.indexOf("video/") === 0) {
+    if (!pending || !path || state.chatMediaSending) return;
+    var file = pending.file, msgId = genId();
+    setState({ pendingChatMedia: null, chatMediaSending: true });
+    render();
+    var finish = function () {
+      if (pending.previewUrl) URL.revokeObjectURL(pending.previewUrl);
+      setState({ chatMediaSending: false });
+      render();
+    };
+    if (pending.type === "video") {
       var reader = new FileReader();
       reader.onload = function (ev) {
         var msg = { id: msgId, from: state.currentUser, type: "video", url: ev.target.result, created: Date.now() };
-        dbSet(path + "/" + msgId, msg).catch(function (err) { setMessage(dbErrorMessage(err, "Errore invio: " + err.message), "error"); });
+        dbSet(path + "/" + msgId, msg).catch(function (err) { setMessage(dbErrorMessage(err, "Errore invio: " + err.message), "error"); }).then(finish, finish);
       };
-      reader.onerror = function () { setMessage("Impossibile leggere il video.", "error"); };
+      reader.onerror = function () { setMessage("Impossibile leggere il video.", "error"); finish(); };
       reader.readAsDataURL(file);
     } else {
       resizeImageFile(file, MAX_CHAT_MEDIA_DIM, 0.65).then(function (blob) {
         var reader = new FileReader();
         reader.onload = function (ev) {
           var msg = { id: msgId, from: state.currentUser, type: "image", url: ev.target.result, created: Date.now() };
-          dbSet(path + "/" + msgId, msg).catch(function (err) { setMessage(dbErrorMessage(err, "Errore invio: " + err.message), "error"); });
+          dbSet(path + "/" + msgId, msg).catch(function (err) { setMessage(dbErrorMessage(err, "Errore invio: " + err.message), "error"); }).then(finish, finish);
         };
         reader.readAsDataURL(blob);
-      }).catch(function (err) { setMessage("Errore: " + err.message, "error"); });
+      }).catch(function (err) { setMessage("Errore: " + err.message, "error"); finish(); });
     }
   }
   function viewChatMedia(msgId) {
@@ -878,18 +924,34 @@
     }).catch(function (err) { setMessage("Errore: " + err.message, "error"); });
   }
 
+  /* id degli scambi attualmente in elaborazione: evita che un doppio click (o un tap
+     multi-touch) su "Accetta" avvii due volte lo spostamento degli oggetti */
+  var tradeInFlight = {};
   function respondTrade(tradeId, accept) {
+    if (tradeInFlight[tradeId]) return;
+    tradeInFlight[tradeId] = true;
     dbGet("trades/" + tradeId).then(function (trade) {
-      if (!trade) return;
+      if (!trade) return null;
+      if (trade.accepted || trade.declined) {
+        /* lo scambio e' gia' stato gestito nel frattempo (doppio click, o l'altra
+           parte/un altro dispositivo ha gia' risposto): non rielaborarlo */
+        setMessage("Questo scambio è già stato gestito.", "error");
+        loadTrades();
+        return null;
+      }
       if (!accept) {
         trade.accepted = false;
         trade.declined = true;
-        return dbSet("trades/" + tradeId, trade);
+        return dbSet("trades/" + tradeId, trade).then(function () {
+          setMessage("Scambio rifiutato.", "success");
+          loadTrades();
+        });
       }
       var fromU = (trade.fromUser || trade.from || "").toLowerCase();
       var toU = (trade.toUser || trade.to || "").toLowerCase();
       var wantIds = toArray(trade.wantIds); /* oggetti di toU che passano a fromU */
       var offerIds = toArray(trade.offerIds); /* oggetti di fromU che passano a toU */
+      var fromMoved = false; /* true una volta che il primo trasferimento e' andato a buon fine */
       /* accettare uno scambio deve spostare fisicamente gli oggetti tra i due inventari,
          non solo segnare la proposta come accettata (vedi commento su "inventories" nelle
          regole del DB, che apre la scrittura incrociata proprio per questo motivo) */
@@ -903,20 +965,34 @@
         return updateInventory(fromU, function (inv) {
           return inv.filter(function (it) { return offerIds.indexOf(it.id) === -1; }).concat(wantItems);
         }).then(function () {
+          fromMoved = true;
           return updateInventory(toU, function (inv) {
             return inv.filter(function (it) { return wantIds.indexOf(it.id) === -1; }).concat(offerItems);
           });
+        }).catch(function (err) {
+          if (!fromMoved) throw err;
+          /* il primo trasferimento e' riuscito ma il secondo no: senza rimedio lo scambio
+             resterebbe bloccato a meta' (un lato ha gia' perso/ricevuto oggetti, l'altro no,
+             e un nuovo tentativo fallirebbe perche' gli oggetti non risultano piu' disponibili).
+             Ripristiniamo quindi l'inventario di fromU come se nulla fosse avvenuto. */
+          return updateInventory(fromU, function (inv) {
+            return inv.filter(function (it) { return wantIds.indexOf(it.id) === -1; }).concat(offerItems);
+          }).then(function () { throw err; }, function () { throw err; });
         });
       }).then(function () {
         trade.accepted = true;
         trade.declined = false;
         return dbSet("trades/" + tradeId, trade);
+      }).then(function () {
+        setMessage("Scambio accettato!", "success");
+        loadTrades();
+        loadInventory();
       });
+    }).catch(function (err) {
+      setMessage("Errore: " + err.message, "error");
     }).then(function () {
-      setMessage(accept ? "Scambio accettato!" : "Scambio rifiutato.", "success");
-      loadTrades();
-      loadInventory();
-    }).catch(function (err) { setMessage("Errore: " + err.message, "error"); });
+      delete tradeInFlight[tradeId];
+    });
   }
 
   function cancelTrade(tradeId) {
@@ -939,6 +1015,7 @@
     if (target === "community") setState({ communitySearch: "" });
     else if (target === "inventory") setState({ inventorySearch: "" });
     else if (target === "history") setState({ historySearch: "", historyLimit: HISTORY_PAGE });
+    else if (target === "otherInventory") setState({ otherUserSearch: "" });
     render();
   }
   function syncSearchBox(el) { if (el && el.parentElement) { el.parentElement.classList.toggle("search-active", el.value.length > 0); } }
@@ -1101,11 +1178,15 @@
     } else {
       friendBtnHtml = '<button type="button" data-action="add-friend" data-username="' + escapeHtml(state.selectedUser) + '" class="btn-ghost btn-sm">' + icon("user-plus") + ' Aggiungi amico</button>';
     }
+    var search = (state.otherUserSearch || "").toLowerCase();
+    var availableOther = state.otherUserInventory.filter(isAvailable);
+    var filteredOther = availableOther.filter(function (i) { return !search || i.name.toLowerCase().indexOf(search) !== -1; });
     var html = '<div class="page-header"><button type="button" data-action="back-to-community" class="btn-icon-left">' + icon("chevron-left") + ' Indietro</button><h2>' + escapeHtml(state.selectedUser) + '</h2>' + friendBtnHtml + '</div>';
     if (state.otherUserInventory.length === 0) {
       html += '<div class="empty-state"><p>Nessun oggetto disponibile.</p></div>';
     } else {
-      html += '<div class="items-grid">' + state.otherUserInventory.filter(isAvailable).map(function (item) {
+      html += '<div class="search-box-wrap"><input type="text" id="other-inventory-search" placeholder="Cerca nell\'inventario di ' + escapeHtml(state.selectedUser) + '..." value="' + escapeHtml(state.otherUserSearch) + '"/>' + (state.otherUserSearch ? '<button type="button" data-action="clear-search" data-target="otherInventory" class="btn-clear">' + icon("x") + '</button>' : '') + '</div>';
+      html += '<div class="items-grid">' + filteredOther.map(function (item) {
         var sel = state.wantIds.indexOf(item.id) !== -1;
         var photos = itemPhotos(item);
         var firstPhoto = photos[0];
@@ -1119,11 +1200,12 @@
           '<div class="select-check">' + icon("check") + '</div>' +
           '</div><div class="item-info"><h3>' + escapeHtml(item.name) + '</h3></div></div>';
       }).join("") + '</div>';
+      if (filteredOther.length === 0) { html += '<div class="empty-state"><p>Nessun risultato.</p></div>'; }
       html += '<div class="trade-builder-btn"><button type="button" data-action="open-trade-builder" class="btn-primary block">' + icon("swap") + ' Proponi Scambio</button></div>';
     }
     if (state.showTradeBuilder) {
       html += '<div class="trade-builder"><div class="trade-section"><h3>Voglio</h3><div class="items-list">' +
-        state.otherUserInventory.filter(isAvailable).map(function (item) {
+        filteredOther.map(function (item) {
           var sel = state.wantIds.indexOf(item.id) !== -1;
           return '<div class="trade-item ' + (sel ? "selected" : "") + '" data-action="toggle-want" data-id="' + escapeHtml(item.id) + '">' + escapeHtml(item.name) + (sel ? ' ' + icon("check") : "") + '</div>';
         }).join("") +
@@ -1239,6 +1321,22 @@
       }).join("");
     }
     html += '</div>';
+    if (state.pendingChatMedia) {
+      var pm = state.pendingChatMedia;
+      html += '<div class="chat-pending-media">' +
+        '<div class="chat-pending-preview">' +
+        (pm.type === "video"
+          ? '<video src="' + escapeHtml(pm.previewUrl) + '" muted playsinline preload="metadata"></video>'
+          : '<img src="' + escapeHtml(pm.previewUrl) + '" alt=""/>') +
+        '</div>' +
+        '<span class="chat-pending-label">' + (pm.type === "video" ? "Video pronto per l'invio — non ancora inviato" : "Foto pronta per l'invio — non ancora inviata") + '</span>' +
+        '<div class="chat-pending-actions">' +
+        '<button type="button" data-action="cancel-chat-media" class="btn-ghost btn-sm">' + icon("x") + ' Annulla</button>' +
+        '<button type="button" data-action="confirm-chat-media" class="btn-primary btn-sm">' + icon("send") + ' Invia</button>' +
+        '</div></div>';
+    } else if (state.chatMediaSending) {
+      html += '<div class="chat-pending-media"><span class="chat-pending-label">' + icon("loader", "spin-tiny") + ' Invio in corso...</span></div>';
+    }
     html += '<form id="chat-form" class="chat-form">' +
       '<label class="chat-attach-btn" title="Invia foto o video"><input type="file" id="chat-media-input" accept="image/*,video/*" style="display:none"/>' + icon("paperclip") + '</label>' +
       '<input id="chat-input" type="text" autocomplete="off" placeholder="Scrivi un messaggio..." value="' + escapeHtml(state.chatInput) + '"/><button type="submit" class="btn-icon" title="Invia">' + icon("send") + '</button></form>';
@@ -1378,7 +1476,9 @@
 
     return '' +
       '<header class="app-header"><div class="row"><span class="wordmark display">Baratto</span>' +
-        '<div class="header-right"><span class="greet">Ciao, <strong>' + escapeHtml(state.currentUser) + '</strong></span>' +
+        '<div class="header-right">' +
+        (state.installAvailable ? '<button data-action="install-app" class="btn-ghost" title="Installa l\'app">' + icon("package") + ' Installa</button>' : '') +
+        '<button type="button" data-action="go-profile" class="profile-btn" title="Il mio inventario">' + icon("user") + '<span class="greet">Ciao, <strong>' + escapeHtml(state.currentUser) + '</strong></span></button>' +
         '<button data-action="delete-account" class="btn-ghost" title="Elimina account">' + icon("trash") + '</button>' +
         '<button data-action="logout" class="btn-ghost">' + icon("logout") + " Esci</button></div></div>" +
         '<div class="tab-nav">' + tabsHtml + "</div></header>" +
@@ -1390,20 +1490,43 @@
       renderLightbox();
   }
 
+  /* ============ indirizzo (hash) per ogni vista ============
+     Non si tratta di pagine .html separate (l'app resta un'unica SPA con un solo
+     login Firebase e un'unica cache offline per la PWA), ma ogni sezione ha comunque
+     un proprio indirizzo condivisibile/salvabile nei preferiti, es:
+     #inventory, #community, #community/marco, #chat, #chat/marco, #friends, #trades */
+  function setHash(h) {
+    try { window.history.replaceState(null, "", h ? ("#" + h) : window.location.pathname); } catch (err) {}
+  }
+  function restoreFromHash() {
+    var h = (window.location.hash || "").replace(/^#\/?/, "");
+    if (!h) return;
+    var parts = h.split("/").map(function (p) { try { return decodeURIComponent(p); } catch (e) { return p; } });
+    var knownTabs = ["inventory", "community", "friends", "chat", "trades"];
+    if (parts[0] === "community" && parts[1]) { openUser(parts[1]); }
+    else if (parts[0] === "chat" && parts[1]) { switchTab("chat"); openChat(parts[1]); }
+    else if (knownTabs.indexOf(parts[0]) !== -1) { switchTab(parts[0]); }
+  }
+
   function switchTab(tab) {
     if (state.tab === "chat" && tab !== "chat") detachChat();
-    var changes = { tab: tab, selectedUser: null, otherUserInventory: [] };
+    clearPendingChatMedia();
+    var changes = { tab: tab, selectedUser: null, otherUserInventory: [], otherUserSearch: "" };
     if (tab === "chat") { detachChat(); changes.chatTarget = null; changes.chatMessages = []; changes.showChatTradeBuilder = false; }
     setState(changes);
     render();
+    setHash(tab);
   }
+  /* usata dall'icona profilo nell'header: riporta sempre al proprio inventario,
+     da qualunque punto dell'app ci si trovi (inventario di un altro utente, chat, ecc.) */
+  function goToOwnInventory() { switchTab("inventory"); }
 
   function render() {
     if (state.booting) {
       document.getElementById("app").innerHTML = '<div class="auth-wrap"><div class="auth-box" style="text-align:center;">' + icon("loader", "spin-sm") + "</div></div>";
       return;
     }
-    var FOCUS_PRESERVE_IDS = ["friend-username", "community-search", "inventory-search", "history-search", "chat-input", "new-group-name"];
+    var FOCUS_PRESERVE_IDS = ["friend-username", "community-search", "inventory-search", "other-inventory-search", "history-search", "chat-input", "new-group-name"];
     var active = document.activeElement;
     var keepFocusId = (active && FOCUS_PRESERVE_IDS.indexOf(active.id) !== -1) ? active.id : null;
     var selStart = keepFocusId ? active.selectionStart : null, selEnd = keepFocusId ? active.selectionEnd : null;
@@ -1465,6 +1588,10 @@
     else if (action === "close-chat-trade") { closeChatTradeBuilder(); }
     else if (action === "submit-chat-trade") { submitChatTrade(); }
     else if (action === "view-chat-media") { viewChatMedia(t.dataset.id); }
+    else if (action === "cancel-chat-media") { cancelChatMedia(); }
+    else if (action === "confirm-chat-media") { confirmSendChatMedia(); }
+    else if (action === "go-profile") { goToOwnInventory(); }
+    else if (action === "install-app") { promptInstall(); }
     else if (action === "open-trade-builder") { state.showTradeBuilder = true; render(); }
     else if (action === "cancel-trade-builder") { state.showTradeBuilder = false; state.wantIds = []; state.offerIds = []; render(); }
     else if (action === "toggle-want") { toggleWant(t.dataset.id); }
@@ -1507,6 +1634,7 @@
     else if (e.target && e.target.id === "friend-username") state.friendInput = e.target.value;
     else if (e.target && e.target.id === "community-search") { state.communitySearch = e.target.value; render(); }
     else if (e.target && e.target.id === "inventory-search") { state.inventorySearch = e.target.value; syncSearchBox(e.target); updateInventoryResults(); }
+    else if (e.target && e.target.id === "other-inventory-search") { state.otherUserSearch = e.target.value; syncSearchBox(e.target); render(); }
     else if (e.target && e.target.id === "history-search") { state.historySearch = e.target.value; state.historyLimit = HISTORY_PAGE; syncSearchBox(e.target); updateHistory(); }
     else if (e.target && e.target.id === "chat-input") { state.chatInput = e.target.value; }
     else if (e.target && e.target.id === "new-group-name") { state.newGroupName = e.target.value; }
@@ -1532,6 +1660,34 @@
     sendFriendRequest(username);
     state.friendInput = "";
     render();
+  }
+
+  /* ============ PWA: installazione e service worker ============ */
+  var deferredInstallPrompt = null;
+  window.addEventListener("beforeinstallprompt", function (e) {
+    e.preventDefault();
+    deferredInstallPrompt = e;
+    setState({ installAvailable: true });
+    render();
+  });
+  window.addEventListener("appinstalled", function () {
+    deferredInstallPrompt = null;
+    setState({ installAvailable: false });
+    render();
+  });
+  function promptInstall() {
+    if (!deferredInstallPrompt) return;
+    deferredInstallPrompt.prompt();
+    deferredInstallPrompt.userChoice.then(function () {
+      deferredInstallPrompt = null;
+      setState({ installAvailable: false });
+      render();
+    });
+  }
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", function () {
+      navigator.serviceWorker.register("service-worker.js").catch(function () { /* l'app funziona comunque senza service worker */ });
+    });
   }
 
   /* ============ avvio ============ */
@@ -1586,7 +1742,10 @@
           chatMessages: [],
           chatInput: "",
           chatOtherInventory: [],
-          showChatTradeBuilder: false
+          showChatTradeBuilder: false,
+          otherUserSearch: "",
+          pendingChatMedia: null,
+          chatMediaSending: false
         });
         render();
         return;
