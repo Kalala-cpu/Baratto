@@ -252,13 +252,13 @@ input { font-family: inherit; }
   justify-content: center;
   width: 2rem;
   height: 2rem;
-  border: none;
+  border: 1px solid var(--line);
   background: var(--cream);
-  color: var(--ink-soft);
+  color: var(--ink);
   border-radius: 50%;
-  transition: background 0.15s, color 0.15s;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
-.btn-icon:hover { background: var(--brass-light); color: var(--brass-dark); }
+.btn-icon:hover { background: var(--brass-light); color: var(--brass-dark); border-color: var(--brass-light); }
 
 .btn-icon-left {
   display: inline-flex;
