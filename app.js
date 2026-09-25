@@ -27,7 +27,10 @@
     refresh: '<path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v5h-5"/>',
     gift: '<rect x="4" y="9.5" width="16" height="10.5" rx="1"/><path d="M4 13.5h16"/><path d="M12 9.5V20"/><path d="M12 9.5c-1.5 0-3-1-3-2.75S10.3 4 12 5.5c1.7-1.5 3-.75 3 1.25S13.5 9.5 12 9.5z"/>',
     search: '<circle cx="11" cy="11" r="7.5"/><path d="M21 21l-4.7-4.7"/>',
-    message: '<path d="M4 5.5h16a1 1 0 0 1 1 1v9.5a1 1 0 0 1-1 1H9.5L5 21v-4H4a1 1 0 0 1-1-1v-9.5a1 1 0 0 1 1-1z"/>'
+    message: '<path d="M4 5.5h16a1 1 0 0 1 1 1v9.5a1 1 0 0 1-1 1H9.5L5 21v-4H4a1 1 0 0 1-1-1v-9.5a1 1 0 0 1 1-1z"/>',
+    paperclip: '<path d="M8 12.5l6.2-6.2a3.2 3.2 0 0 1 4.5 4.5L11.2 18a5 5 0 0 1-7.1-7.1L13.5 1.5"/>',
+    video: '<rect x="3" y="6" width="13" height="12" rx="1.5"/><path d="M16 10l5-3v10l-5-3z"/>',
+    "users-plus": '<circle cx="8.5" cy="8" r="3"/><path d="M2.5 20c0-3.31 2.69-6 6-6s6 2.69 6 6"/><path d="M18 8v6M15 11h6"/>'
   };
   function icon(name, extra) {
     return '<svg class="icon ' + (extra || "") + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">' + (ICON_PATHS[name] || "") + "</svg>";
@@ -187,9 +190,15 @@
     friends: [],
     friendInput: "",
     lightbox: null,
-    chatFriend: null,
+    groups: [],
+    showGroupModal: false,
+    newGroupName: "",
+    newGroupMembers: [],
+    chatTarget: null,
     chatMessages: [],
-    chatInput: ""
+    chatInput: "",
+    chatOtherInventory: [],
+    showChatTradeBuilder: false
   };
 
   function setState(changes) { Object.assign(state, changes); }
@@ -355,6 +364,17 @@
       render();
     });
   }
+  /* carica i gruppi di cui l'utente corrente e' membro */
+  function loadGroups() {
+    dbGet("groups").then(function (all) {
+      var list = toArray(all).filter(function (g) {
+        return toArray(g.members).some(function (m) { return sameUser(m, state.currentUser); });
+      });
+      list.sort(function (a, b) { return (b.created || 0) - (a.created || 0); });
+      setState({ groups: list });
+      render();
+    });
+  }
   function updateHistory() {
     var search = (state.historySearch || "").toLowerCase(), filter = state.historyFilter;
     /* always filter from the full unmodified trade list */
@@ -428,9 +448,15 @@
         friends: [],
         friendInput: "",
         lightbox: null,
-        chatFriend: null,
+        groups: [],
+        showGroupModal: false,
+        newGroupName: "",
+        newGroupMembers: [],
+        chatTarget: null,
         chatMessages: [],
-        chatInput: ""
+        chatInput: "",
+        chatOtherInventory: [],
+        showChatTradeBuilder: false
       });
       render();
     });
@@ -459,7 +485,7 @@
   function resolveProfile(fbUser) {
     dbGet("profiles/" + fbUser.uid).then(function (profile) {
       var uname = profile && profile.username;
-      if (uname) { setState({ currentUser: uname }); loadInventory(); loadCommunity(); loadFriends(); loadTrades(); }
+      if (uname) { setState({ currentUser: uname }); loadInventory(); loadCommunity(); loadFriends(); loadTrades(); loadGroups(); }
       else { setState({ needUsername: true, usernameInput: "" }); }
       render();
     }).catch(function (err) {
@@ -485,6 +511,7 @@
         loadCommunity();
         loadFriends();
         loadTrades();
+        loadGroups();
         render();
       });
     }).catch(function (err) { setState({ authError: "Errore: " + err.message }); render(); });
@@ -535,22 +562,26 @@
   function backToCommunity() { setState({ selectedUser: null, otherUserInventory: [] }); render(); }
   function openFriend(username) { openUser(username); setState({ tab: "community" }); render(); }
 
-  /* ============ chat privata ============ */
+  /* ============ chat (privata e di gruppo) ============ */
   var chatRef = null; /* riferimento Firebase attivo, per poterlo staccare (off) quando si cambia chat */
+  var MAX_CHAT_MEDIA_DIM = 640;
   /* id univoco e stabile per la coppia di utenti, indipendente da chi apre la chat per primo */
   function chatIdFor(u1, u2) {
     return [String(u1 || "").toLowerCase(), String(u2 || "").toLowerCase()].sort().join("__");
   }
+  /* percorso del database dei messaggi per il target di chat attivo (amico o gruppo) */
+  function chatMessagesPath() {
+    if (!state.chatTarget) return null;
+    if (state.chatTarget.type === "group") return "groupChats/" + state.chatTarget.id + "/messages";
+    return "chats/" + chatIdFor(state.currentUser, state.chatTarget.id) + "/messages";
+  }
   function detachChat() {
     if (chatRef) { chatRef.off("value"); chatRef = null; }
   }
-  function openChat(username) {
-    if (!username) return;
-    detachChat();
-    setState({ tab: "chat", chatFriend: username, chatMessages: [], chatInput: "" });
-    render();
-    var id = chatIdFor(state.currentUser, username);
-    chatRef = fbDb.ref("chats/" + id + "/messages");
+  function attachChatRef() {
+    var path = chatMessagesPath();
+    if (!path) return;
+    chatRef = fbDb.ref(path);
     chatRef.on("value", function (snap) {
       var msgs = toArray(snap.val()).sort(function (a, b) { return (a.created || 0) - (b.created || 0); });
       setState({ chatMessages: msgs });
@@ -560,7 +591,22 @@
       setMessage(dbErrorMessage(err, "Errore chat: " + err.message), "error");
     });
   }
-  function closeChat() { detachChat(); setState({ chatFriend: null, chatMessages: [], chatInput: "" }); render(); }
+  function openChat(username) {
+    if (!username) return;
+    detachChat();
+    setState({ tab: "chat", chatTarget: { type: "friend", id: username, name: username }, chatMessages: [], chatInput: "", chatOtherInventory: [], showChatTradeBuilder: false });
+    render();
+    attachChatRef();
+  }
+  function openGroupChat(groupId) {
+    var group = getItemById(groupId, state.groups);
+    if (!group) return;
+    detachChat();
+    setState({ tab: "chat", chatTarget: { type: "group", id: group.id, name: group.name, members: toArray(group.members) }, chatMessages: [], chatInput: "" });
+    render();
+    attachChatRef();
+  }
+  function closeChat() { detachChat(); setState({ chatTarget: null, chatMessages: [], chatInput: "", showChatTradeBuilder: false }); render(); }
   function scrollChatToBottom() {
     setTimeout(function () {
       var el = document.getElementById("chat-messages");
@@ -570,15 +616,47 @@
   function sendChatMessage(e) {
     e.preventDefault();
     var text = (state.chatInput || "").trim();
-    if (!text || !state.chatFriend) return;
-    var id = chatIdFor(state.currentUser, state.chatFriend);
+    var path = chatMessagesPath();
+    if (!text || !path) return;
     var msgId = genId();
-    var msg = { id: msgId, from: state.currentUser, text: text, created: Date.now() };
+    var msg = { id: msgId, from: state.currentUser, type: "text", text: text, created: Date.now() };
     setState({ chatInput: "" });
     render();
-    dbSet("chats/" + id + "/messages/" + msgId, msg).catch(function (err) {
+    dbSet(path + "/" + msgId, msg).catch(function (err) {
       setMessage(dbErrorMessage(err, "Errore invio: " + err.message), "error");
     });
+  }
+  /* invio di una foto o di un video in chat */
+  function handleChatMediaChange(e) {
+    var file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    var path = chatMessagesPath();
+    if (!file || !path) return;
+    var msgId = genId();
+    if (file.type && file.type.indexOf("video/") === 0) {
+      var reader = new FileReader();
+      reader.onload = function (ev) {
+        var msg = { id: msgId, from: state.currentUser, type: "video", url: ev.target.result, created: Date.now() };
+        dbSet(path + "/" + msgId, msg).catch(function (err) { setMessage(dbErrorMessage(err, "Errore invio: " + err.message), "error"); });
+      };
+      reader.onerror = function () { setMessage("Impossibile leggere il video.", "error"); };
+      reader.readAsDataURL(file);
+    } else {
+      resizeImageFile(file, MAX_CHAT_MEDIA_DIM, 0.65).then(function (blob) {
+        var reader = new FileReader();
+        reader.onload = function (ev) {
+          var msg = { id: msgId, from: state.currentUser, type: "image", url: ev.target.result, created: Date.now() };
+          dbSet(path + "/" + msgId, msg).catch(function (err) { setMessage(dbErrorMessage(err, "Errore invio: " + err.message), "error"); });
+        };
+        reader.readAsDataURL(blob);
+      }).catch(function (err) { setMessage("Errore: " + err.message, "error"); });
+    }
+  }
+  function viewChatMedia(msgId) {
+    var msg = getItemById(msgId, state.chatMessages);
+    if (!msg) return;
+    setState({ lightbox: { item: null, photos: [{ url: msg.url, type: msg.type === "video" ? "video" : "image" }], index: 0 } });
+    render();
   }
   function formatChatTime(ts) {
     if (!ts) return "";
@@ -588,9 +666,50 @@
     return hh + ":" + mm;
   }
 
+  /* ============ gruppi ============ */
+  function openGroupModal() { setState({ showGroupModal: true, newGroupName: "", newGroupMembers: [] }); render(); }
+  function closeGroupModal() { setState({ showGroupModal: false }); render(); }
+  function toggleGroupMember(username) {
+    var i = state.newGroupMembers.indexOf(username);
+    if (i >= 0) state.newGroupMembers.splice(i, 1); else state.newGroupMembers.push(username);
+    render();
+  }
+  function submitCreateGroup(e) {
+    e.preventDefault();
+    var name = (state.newGroupName || "").trim();
+    if (!name) { setMessage("Inserisci un nome per il gruppo.", "error"); return; }
+    if (!state.newGroupMembers.length) { setMessage("Seleziona almeno un amico.", "error"); return; }
+    var group = { id: genId(), name: name, owner: state.currentUser, members: [state.currentUser].concat(state.newGroupMembers), created: Date.now() };
+    dbSet("groups/" + group.id, group).then(function () {
+      setState({ showGroupModal: false, newGroupName: "", newGroupMembers: [] });
+      setMessage("Gruppo creato!", "success");
+      loadGroups();
+      setState({ groups: state.groups.concat([group]) });
+      openGroupChat(group.id);
+    }).catch(function (err) { setMessage("Errore: " + dbErrorMessage(err, err.message), "error"); });
+  }
+  function leaveGroup(groupId) {
+    if (!confirm("Uscire da questo gruppo?")) return;
+    dbGet("groups/" + groupId).then(function (g) {
+      if (!g) return;
+      var members = toArray(g.members).filter(function (m) { return !sameUser(m, state.currentUser); });
+      if (!members.length) return fbDb.ref("groups/" + groupId).remove();
+      g.members = members;
+      return dbSet("groups/" + groupId, g);
+    }).then(function () {
+      setMessage("Hai lasciato il gruppo.", "success");
+      closeChat();
+      loadGroups();
+    }).catch(function (err) { setMessage("Errore: " + err.message, "error"); });
+  }
+
   /* ============ trades ============ */
   function toggleWant(id) { var i = state.wantIds.indexOf(id); if (i >= 0) state.wantIds.splice(i, 1); else state.wantIds.push(id); render(); }
   function toggleOffer(id) { var i = state.offerIds.indexOf(id); if (i >= 0) state.offerIds.splice(i, 1); else state.offerIds.push(id); render(); }
+  /* nomi degli oggetti selezionati, salvati nella proposta cosi' restano leggibili anche se l'oggetto viene poi modificato o eliminato */
+  function namesForIds(ids, arr) {
+    return ids.map(function (id) { var it = getItemById(id, arr); return it ? it.name : "?"; });
+  }
 
   function submitTrade() {
     if (!state.selectedUser) return;
@@ -601,6 +720,8 @@
       to: state.selectedUser,
       wantIds: state.wantIds,
       offerIds: state.offerIds,
+      wantNames: namesForIds(state.wantIds, state.otherUserInventory),
+      offerNames: namesForIds(state.offerIds, state.inventory),
       created: Date.now(),
       accepted: false,
       declined: false
@@ -609,6 +730,47 @@
       setState({ showTradeBuilder: false, wantIds: [], offerIds: [] });
       setMessage("Scambio proposto!", "success");
       loadTrades();
+    }).catch(function (err) { setMessage("Errore: " + err.message, "error"); });
+  }
+
+  /* ============ proposta di scambio dalla chat ============ */
+  function openChatTradeBuilder() {
+    if (!state.chatTarget || state.chatTarget.type !== "friend") return;
+    setState({ showChatTradeBuilder: true, wantIds: [], offerIds: [], chatOtherInventory: [] });
+    render();
+    getInventory(state.chatTarget.id.toLowerCase()).then(function (inv) {
+      setState({ chatOtherInventory: inv });
+      render();
+    });
+  }
+  function closeChatTradeBuilder() { setState({ showChatTradeBuilder: false, wantIds: [], offerIds: [] }); render(); }
+  function submitChatTrade() {
+    if (!state.chatTarget || state.chatTarget.type !== "friend") return;
+    if (!state.wantIds.length || !state.offerIds.length) { setMessage("Seleziona cosa vuoi e cosa offri.", "error"); return; }
+    var wantNames = namesForIds(state.wantIds, state.chatOtherInventory);
+    var offerNames = namesForIds(state.offerIds, state.inventory);
+    var trade = {
+      id: genId(),
+      from: state.currentUser,
+      to: state.chatTarget.id,
+      wantIds: state.wantIds,
+      offerIds: state.offerIds,
+      wantNames: wantNames,
+      offerNames: offerNames,
+      created: Date.now(),
+      accepted: false,
+      declined: false
+    };
+    var path = chatMessagesPath();
+    dbSet("trades/" + trade.id, trade).then(function () {
+      setState({ showChatTradeBuilder: false, wantIds: [], offerIds: [] });
+      setMessage("Scambio proposto!", "success");
+      loadTrades();
+      if (path) {
+        var msgId = genId();
+        var msg = { id: msgId, from: state.currentUser, type: "trade", tradeId: trade.id, wantNames: wantNames, offerNames: offerNames, created: Date.now() };
+        return dbSet(path + "/" + msgId, msg);
+      }
     }).catch(function (err) { setMessage("Errore: " + err.message, "error"); });
   }
 
@@ -699,7 +861,7 @@
     var lb = state.lightbox, p = lb.photos[lb.index];
     var mediaHtml = isVideo(p)
       ? '<video src="' + escapeHtml(photoUrl(p)) + '" class="lightbox-video" controls autoplay loop></video>'
-      : '<img src="' + escapeHtml(photoUrl(p)) + '" alt="' + escapeHtml(lb.item.name) + '"/>';
+      : '<img src="' + escapeHtml(photoUrl(p)) + '" alt="' + escapeHtml(lb.item ? lb.item.name : "") + '"/>';
     return '' +
       '<div id="lightbox-overlay" class="lightbox-overlay"></div>' +
       '<div class="lightbox">' +
@@ -842,44 +1004,154 @@
     return html;
   }
 
-  function renderChatListTab() {
+  function renderChatSidebar() {
     var accepted = state.friends.filter(function (f) { return f.status === "accepted"; });
-    var html = '<div class="page-header"><h2>Chat</h2></div>';
-    if (!accepted.length) {
+    var html = '<div class="chat-sidebar-header"><h2>Chat</h2><button type="button" data-action="open-group-modal" class="btn-ghost btn-sm" title="Nuovo gruppo">' + icon("users-plus") + ' Gruppo</button></div>';
+    if (!accepted.length && !state.groups.length) {
       html += '<div class="empty-state"><p>Aggiungi qualche amico per iniziare a chattare.</p></div>';
-    } else {
-      html += '<div class="chat-friend-list">' + accepted.map(function (f) {
-        return '<div class="chat-friend-card" data-action="open-chat" data-username="' + escapeHtml(f.username || "") + '">' +
-          '<div class="who"><div>' + icon("user") + '</div><div><div class="name">' + escapeHtml(f.username || "") + '</div></div></div>' +
-          icon("message") + '</div>';
-      }).join("") + '</div>';
+      return html;
     }
+    html += '<div class="chat-friend-list">';
+    if (state.groups.length) {
+      html += '<div class="chat-list-section-title">Gruppi</div>' + state.groups.map(function (g) {
+        var active = state.chatTarget && state.chatTarget.type === "group" && state.chatTarget.id === g.id;
+        return '<div class="chat-friend-card ' + (active ? "active" : "") + '" data-action="open-group-chat" data-id="' + escapeHtml(g.id) + '">' +
+          '<div class="who"><div class="chat-avatar group">' + icon("users") + '</div><div><div class="name">' + escapeHtml(g.name || "") + '</div><div class="chat-sub">' + toArray(g.members).length + ' membri</div></div></div>' +
+          icon("message") + '</div>';
+      }).join("");
+    }
+    if (accepted.length) {
+      html += '<div class="chat-list-section-title">Amici</div>' + accepted.map(function (f) {
+        var active = state.chatTarget && state.chatTarget.type === "friend" && sameUser(state.chatTarget.id, f.username);
+        return '<div class="chat-friend-card ' + (active ? "active" : "") + '" data-action="open-chat" data-username="' + escapeHtml(f.username || "") + '">' +
+          '<div class="who"><div class="chat-avatar">' + icon("user") + '</div><div><div class="name">' + escapeHtml(f.username || "") + '</div></div></div>' +
+          icon("message") + '</div>';
+      }).join("");
+    }
+    html += '</div>';
     return html;
   }
 
+  function renderChatMessageContent(m) {
+    var type = m.type || "text";
+    if (type === "image") {
+      return '<div class="chat-bubble-media" data-action="view-chat-media" data-id="' + escapeHtml(m.id) + '"><img src="' + escapeHtml(m.url) + '" alt="foto"/></div>';
+    }
+    if (type === "video") {
+      return '<div class="chat-bubble-media" data-action="view-chat-media" data-id="' + escapeHtml(m.id) + '"><video src="' + escapeHtml(m.url) + '" muted playsinline preload="metadata"></video><div class="chat-bubble-play">' + icon("video") + '</div></div>';
+    }
+    if (type === "trade") {
+      var trade = (state.allTrades || []).filter(function (t) { return t.id === m.tradeId; })[0];
+      var status = trade ? (trade.accepted ? "accepted" : trade.declined ? "declined" : "pending") : "pending";
+      var isRecipient = trade && sameUser(trade.to, state.currentUser);
+      var isSender = trade && sameUser(trade.from, state.currentUser);
+      var want = (m.wantNames || (trade && trade.wantNames) || []).map(escapeHtml).join(", ") || "—";
+      var offer = (m.offerNames || (trade && trade.offerNames) || []).map(escapeHtml).join(", ") || "—";
+      var html = '<div class="chat-trade-card ' + status + '">' +
+        '<div class="chat-trade-title">' + icon("swap") + ' Proposta di scambio</div>' +
+        '<div class="chat-trade-row"><span class="chat-trade-label">Vuole:</span> ' + want + '</div>' +
+        '<div class="chat-trade-row"><span class="chat-trade-label">Offre:</span> ' + offer + '</div>' +
+        '<div class="chat-trade-status">' + (status === "accepted" ? "Accettato" : status === "declined" ? "Rifiutato" : "In attesa") + '</div>';
+      if (status === "pending" && trade) {
+        if (isRecipient) {
+          html += '<div class="trade-actions-inline"><button type="button" data-action="accept-trade" data-id="' + escapeHtml(trade.id) + '" class="btn-primary btn-sm">' + icon("check") + ' Accetta</button>' +
+            '<button type="button" data-action="decline-trade" data-id="' + escapeHtml(trade.id) + '" class="btn-ghost btn-sm">' + icon("x") + ' Rifiuta</button></div>';
+        } else if (isSender) {
+          html += '<div class="trade-actions-inline"><button type="button" data-action="cancel-outgoing-trade" data-id="' + escapeHtml(trade.id) + '" class="btn-ghost btn-sm">' + icon("x") + ' Annulla</button></div>';
+        }
+      }
+      html += '</div>';
+      return html;
+    }
+    return '<div class="chat-bubble-text">' + escapeHtml(m.text || "") + '</div>';
+  }
+
   function renderChatThread() {
+    var target = state.chatTarget;
+    var isGroup = target.type === "group";
     var html = '<div class="chat-thread">';
-    html += '<div class="chat-thread-header"><button type="button" data-action="close-chat" class="btn-icon-left">' + icon("chevron-left") + ' Indietro</button><h2>' + escapeHtml(state.chatFriend) + '</h2></div>';
+    html += '<div class="chat-thread-header"><button type="button" data-action="close-chat" class="btn-icon-left mobile-only">' + icon("chevron-left") + '</button>' +
+      '<div class="chat-avatar ' + (isGroup ? "group" : "") + '">' + icon(isGroup ? "users" : "user") + '</div>' +
+      '<div class="chat-thread-title"><h2>' + escapeHtml(target.name) + '</h2>' + (isGroup ? '<div class="chat-sub">' + toArray(target.members).length + ' membri</div>' : '') + '</div>' +
+      '<div class="chat-thread-actions">' +
+      (!isGroup ? '<button type="button" data-action="open-chat-trade" class="btn-ghost btn-sm" title="Proponi scambio">' + icon("swap") + ' Scambio</button>' : '<button type="button" data-action="leave-group" data-id="' + escapeHtml(target.id) + '" class="btn-ghost btn-sm" title="Esci dal gruppo">' + icon("x") + ' Esci</button>') +
+      '</div></div>';
     html += '<div class="chat-messages" id="chat-messages">';
     if (!state.chatMessages.length) {
       html += '<div class="empty-state"><p>Nessun messaggio ancora. Scrivi il primo!</p></div>';
     } else {
       html += state.chatMessages.map(function (m) {
         var own = sameUser(m.from, state.currentUser);
-        return '<div class="chat-bubble-row ' + (own ? "own" : "") + '"><div class="chat-bubble">' +
-          '<div class="chat-bubble-text">' + escapeHtml(m.text) + '</div>' +
+        var showSender = isGroup && !own;
+        return '<div class="chat-bubble-row ' + (own ? "own" : "") + '"><div class="chat-bubble ' + ((m.type === "image" || m.type === "video") ? "chat-bubble-has-media" : "") + '">' +
+          (showSender ? '<div class="chat-bubble-sender">' + escapeHtml(m.from) + '</div>' : '') +
+          renderChatMessageContent(m) +
           '<div class="chat-bubble-time">' + formatChatTime(m.created) + '</div>' +
           '</div></div>';
       }).join("");
     }
     html += '</div>';
-    html += '<form id="chat-form" class="chat-form"><input id="chat-input" type="text" autocomplete="off" placeholder="Scrivi un messaggio..." value="' + escapeHtml(state.chatInput) + '"/><button type="submit" class="btn-icon" title="Invia">' + icon("send") + '</button></form>';
+    html += '<form id="chat-form" class="chat-form">' +
+      '<label class="chat-attach-btn" title="Invia foto o video"><input type="file" id="chat-media-input" accept="image/*,video/*" style="display:none"/>' + icon("paperclip") + '</label>' +
+      '<input id="chat-input" type="text" autocomplete="off" placeholder="Scrivi un messaggio..." value="' + escapeHtml(state.chatInput) + '"/><button type="submit" class="btn-icon" title="Invia">' + icon("send") + '</button></form>';
     html += '</div>';
     return html;
   }
 
   function renderChatTab() {
-    return state.chatFriend ? renderChatThread() : renderChatListTab();
+    var active = state.chatTarget ? "thread" : "list";
+    var mainInner = state.chatTarget ? renderChatThread() : '<div class="chat-placeholder">' + icon("message") + '<p>Seleziona una chat per iniziare</p></div>';
+    return '<div class="chat-layout" data-active="' + active + '">' +
+      '<div class="chat-sidebar">' + renderChatSidebar() + '</div>' +
+      '<div class="chat-main">' + mainInner + '</div>' +
+      '</div>' +
+      (state.showGroupModal ? renderGroupModal() : '') +
+      (state.showChatTradeBuilder ? renderChatTradeModal() : '');
+  }
+
+  function renderGroupModal() {
+    var friendsList = state.friends.filter(function (f) { return f.status === "accepted"; });
+    return '<div id="group-modal-overlay" class="modal-overlay" data-action="close-group-modal"></div>' +
+      '<div class="modal">' +
+      '<div class="modal-header"><h2>Nuovo gruppo</h2><button type="button" data-action="close-group-modal" class="btn-close">' + icon("x") + '</button></div>' +
+      '<form id="create-group-form" class="modal-body">' +
+      '<div class="field"><label>Nome del gruppo</label><input id="new-group-name" type="text" placeholder="Es: Scambisti del quartiere" value="' + escapeHtml(state.newGroupName) + '"/></div>' +
+      '<div class="field"><label>Aggiungi amici</label>' +
+      (friendsList.length
+        ? '<div class="group-member-list">' + friendsList.map(function (f) {
+            var sel = state.newGroupMembers.indexOf(f.username) !== -1;
+            return '<div class="group-member-row ' + (sel ? "selected" : "") + '" data-action="toggle-group-member" data-username="' + escapeHtml(f.username) + '">' +
+              '<div class="who"><div class="chat-avatar">' + icon("user") + '</div><span>' + escapeHtml(f.username) + '</span></div>' +
+              '<div class="select-check-inline">' + (sel ? icon("check") : "") + '</div></div>';
+          }).join("") + '</div>'
+        : '<p class="chat-sub">Aggiungi prima qualche amico per poter creare un gruppo.</p>') +
+      '</div>' +
+      '<div class="modal-footer"><button type="submit" class="btn-primary block">Crea gruppo</button></div>' +
+      '</form></div>';
+  }
+
+  function renderChatTradeModal() {
+    var otherItems = state.chatOtherInventory.filter(isAvailable);
+    return '<div id="chat-trade-overlay" class="modal-overlay" data-action="close-chat-trade"></div>' +
+      '<div class="modal">' +
+      '<div class="modal-header"><h2>Proponi scambio a ' + escapeHtml(state.chatTarget.name) + '</h2><button type="button" data-action="close-chat-trade" class="btn-close">' + icon("x") + '</button></div>' +
+      '<div class="modal-body">' +
+      '<div class="trade-builder trade-builder-inline"><div class="trade-section"><h3>Voglio</h3><div class="items-list">' +
+      (otherItems.length ? otherItems.map(function (item) {
+        var sel = state.wantIds.indexOf(item.id) !== -1;
+        return '<div class="trade-item ' + (sel ? "selected" : "") + '" data-action="toggle-want" data-id="' + escapeHtml(item.id) + '">' + escapeHtml(item.name) + (sel ? ' ' + icon("check") : "") + '</div>';
+      }).join("") : '<p class="chat-sub">Nessun oggetto disponibile.</p>') +
+      '</div></div>' +
+      '<div class="trade-divider">' + icon("swap") + '</div>' +
+      '<div class="trade-section"><h3>Offro</h3><div class="items-list">' +
+      state.inventory.map(function (item) {
+        var sel = state.offerIds.indexOf(item.id) !== -1;
+        return '<div class="trade-item ' + (sel ? "selected" : "") + '" data-action="toggle-offer" data-id="' + escapeHtml(item.id) + '">' + escapeHtml(item.name) + (sel ? ' ' + icon("check") : "") + '</div>';
+      }).join("") +
+      '</div></div></div>' +
+      '</div>' +
+      '<div class="modal-footer"><div class="trade-actions"><button type="button" data-action="close-chat-trade" class="btn-ghost">Annulla</button><button type="button" data-action="submit-chat-trade" class="btn-primary">Invia Proposta</button></div></div>' +
+      '</div>';
   }
 
   function renderTradesTab() {
@@ -901,6 +1173,10 @@
         return '<div class="trade-card ' + (t.accepted ? "accepted" : t.declined ? "declined" : "pending") + '">' +
           '<div class="trade-header"><span>' + (isSender ? "A: " : "Da: ") + other + '</span>' +
           '<span class="trade-status">' + (t.accepted ? "Accettato" : t.declined ? "Rifiutato" : "In attesa") + '</span></div>' +
+          ((t.wantNames && t.wantNames.length) || (t.offerNames && t.offerNames.length)
+            ? '<div class="chat-trade-row"><span class="chat-trade-label">' + (isSender ? "Volevi:" : "Vuole:") + '</span> ' + (t.wantNames || []).map(escapeHtml).join(", ") + '</div>' +
+              '<div class="chat-trade-row"><span class="chat-trade-label">' + (isSender ? "Offrivi:" : "Offre:") + '</span> ' + (t.offerNames || []).map(escapeHtml).join(", ") + '</div>'
+            : '') +
           (!t.accepted && !t.declined
             ? '<div class="trade-actions-inline">' +
               (isSender
@@ -961,7 +1237,7 @@
   function switchTab(tab) {
     if (state.tab === "chat" && tab !== "chat") detachChat();
     var changes = { tab: tab, selectedUser: null, otherUserInventory: [] };
-    if (tab === "chat") { detachChat(); changes.chatFriend = null; changes.chatMessages = []; }
+    if (tab === "chat") { detachChat(); changes.chatTarget = null; changes.chatMessages = []; changes.showChatTradeBuilder = false; }
     setState(changes);
     render();
   }
@@ -971,7 +1247,7 @@
       document.getElementById("app").innerHTML = '<div class="auth-wrap"><div class="auth-box" style="text-align:center;">' + icon("loader", "spin-sm") + "</div></div>";
       return;
     }
-    var FOCUS_PRESERVE_IDS = ["friend-username", "community-search", "inventory-search", "history-search", "chat-input"];
+    var FOCUS_PRESERVE_IDS = ["friend-username", "community-search", "inventory-search", "history-search", "chat-input", "new-group-name"];
     var active = document.activeElement;
     var keepFocusId = (active && FOCUS_PRESERVE_IDS.indexOf(active.id) !== -1) ? active.id : null;
     var selStart = keepFocusId ? active.selectionStart : null, selEnd = keepFocusId ? active.selectionEnd : null;
@@ -1022,6 +1298,15 @@
     else if (action === "open-friend") { openFriend(t.dataset.username); }
     else if (action === "open-chat") { openChat(t.dataset.username); }
     else if (action === "close-chat") { closeChat(); }
+    else if (action === "open-group-chat") { openGroupChat(t.dataset.id); }
+    else if (action === "open-group-modal") { openGroupModal(); }
+    else if (action === "close-group-modal") { closeGroupModal(); }
+    else if (action === "toggle-group-member") { toggleGroupMember(t.dataset.username); }
+    else if (action === "leave-group") { leaveGroup(t.dataset.id); }
+    else if (action === "open-chat-trade") { openChatTradeBuilder(); }
+    else if (action === "close-chat-trade") { closeChatTradeBuilder(); }
+    else if (action === "submit-chat-trade") { submitChatTrade(); }
+    else if (action === "view-chat-media") { viewChatMedia(t.dataset.id); }
     else if (action === "open-trade-builder") { state.showTradeBuilder = true; render(); }
     else if (action === "cancel-trade-builder") { state.showTradeBuilder = false; state.wantIds = []; state.offerIds = []; render(); }
     else if (action === "toggle-want") { toggleWant(t.dataset.id); }
@@ -1046,11 +1331,13 @@
     else if (e.target && e.target.id === "username-form") handleClaimUsername(e);
     else if (e.target && e.target.id === "add-friend-form") handleAddFriendSubmit(e);
     else if (e.target && e.target.id === "chat-form") sendChatMessage(e);
+    else if (e.target && e.target.id === "create-group-form") submitCreateGroup(e);
   });
 
   document.addEventListener("change", function (e) {
     if (e.target && e.target.id === "photo-input") handleFileChange(e);
     else if (e.target && e.target.id === "photo-input-edit") handleFileChange(e);
+    else if (e.target && e.target.id === "chat-media-input") handleChatMediaChange(e);
     else if (e.target && e.target.type === "checkbox" && e.target.closest(".avail-toggle")) toggleAvailable(e.target.dataset.id);
   });
 
@@ -1064,6 +1351,7 @@
     else if (e.target && e.target.id === "inventory-search") { state.inventorySearch = e.target.value; syncSearchBox(e.target); updateInventoryResults(); }
     else if (e.target && e.target.id === "history-search") { state.historySearch = e.target.value; state.historyLimit = HISTORY_PAGE; syncSearchBox(e.target); updateHistory(); }
     else if (e.target && e.target.id === "chat-input") { state.chatInput = e.target.value; }
+    else if (e.target && e.target.id === "new-group-name") { state.newGroupName = e.target.value; }
   });
 
   document.addEventListener("keydown", function (e) {
@@ -1132,9 +1420,15 @@
           friends: [],
           friendInput: "",
           lightbox: null,
-          chatFriend: null,
+          groups: [],
+          showGroupModal: false,
+          newGroupName: "",
+          newGroupMembers: [],
+          chatTarget: null,
           chatMessages: [],
-          chatInput: ""
+          chatInput: "",
+          chatOtherInventory: [],
+          showChatTradeBuilder: false
         });
         render();
         return;
