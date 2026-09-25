@@ -30,7 +30,8 @@
     message: '<path d="M4 5.5h16a1 1 0 0 1 1 1v9.5a1 1 0 0 1-1 1H9.5L5 21v-4H4a1 1 0 0 1-1-1v-9.5a1 1 0 0 1 1-1z"/>',
     paperclip: '<path d="M8 12.5l6.2-6.2a3.2 3.2 0 0 1 4.5 4.5L11.2 18a5 5 0 0 1-7.1-7.1L13.5 1.5"/>',
     video: '<rect x="3" y="6" width="13" height="12" rx="1.5"/><path d="M16 10l5-3v10l-5-3z"/>',
-    "users-plus": '<circle cx="8.5" cy="8" r="3"/><path d="M2.5 20c0-3.31 2.69-6 6-6s6 2.69 6 6"/><path d="M18 8v6M15 11h6"/>'
+    "users-plus": '<circle cx="8.5" cy="8" r="3"/><path d="M2.5 20c0-3.31 2.69-6 6-6s6 2.69 6 6"/><path d="M18 8v6M15 11h6"/>',
+    star: '<path d="M12 3.3l2.7 5.6 6.1.8-4.4 4.3 1 6.1L12 17l-5.4 3.1 1-6.1L3.2 9.7l6.1-.8z"/>'
   };
   function icon(name, extra) {
     return '<svg class="icon ' + (extra || "") + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">' + (ICON_PATHS[name] || "") + "</svg>";
@@ -272,6 +273,19 @@
       if (errors.length) { setMessage("Errore con: " + errors.join(", "), "error"); }
       render();
     });
+  }
+
+  /* scambia una foto (dell'array "photos", passato per riferimento) con quella adiacente,
+     nella direzione "dir" (-1 = verso sinistra/prima, 1 = verso destra/dopo). Usata per
+     riordinare le foto di un oggetto: la prima della lista e' sempre la copertina. */
+  function swapPhotos(photos, idx, dir) {
+    if (isNaN(idx)) return;
+    var target = idx + dir;
+    if (target < 0 || target >= photos.length) return;
+    var tmp = photos[idx];
+    photos[idx] = photos[target];
+    photos[target] = tmp;
+    render();
   }
 
   /* ============ add item ============ */
@@ -955,6 +969,26 @@
   function isTradeExpired(t) {
     return !!(t && t.expiresAt && !t.accepted && !t.declined && Date.now() > t.expiresAt);
   }
+  /* formatta la data/ora di scadenza di una proposta come "gg/mm alle hh:mm" */
+  function formatTradeExpiry(ts) {
+    if (!ts) return "";
+    var d = new Date(ts);
+    var gg = d.getDate().toString().padStart(2, "0");
+    var mm = (d.getMonth() + 1).toString().padStart(2, "0");
+    var hh = d.getHours().toString().padStart(2, "0");
+    var mi = d.getMinutes().toString().padStart(2, "0");
+    return gg + "/" + mm + " alle " + hh + ":" + mi;
+  }
+  /* badge evidenziato con la data di scadenza di una proposta di scambio, se ne ha una:
+     usato sia nella card di scambio in chat sia nella schermata "Scambi", cosi' la
+     scadenza si nota subito e non solo dallo stato "In attesa"/"Scaduto". Ambra finche'
+     il termine non e' passato, rosso una volta scaduta. */
+  function renderTradeExpiryBadge(t, cssClass) {
+    if (!t || !t.expiresAt) return "";
+    var expired = isTradeExpired(t);
+    var label = (expired ? "Scaduta il " : "Scade il ") + formatTradeExpiry(t.expiresAt);
+    return '<div class="' + cssClass + (expired ? " is-expired" : "") + '">' + icon("clock") + ' ' + label + '</div>';
+  }
 
   /* proporre uno scambio dall'inventario di un utente (tab Community, non dalla chat):
      la proposta finisce comunque come messaggio nella chat con quella persona, cosi' la
@@ -1226,14 +1260,19 @@
       '<div class="field"><label>Nome</label><input id="new-item-name" type="text" placeholder="Es: Bicicletta blu" value="' + escapeHtml(state.newItemName) + '"/></div>' +
       '<div class="photos-section"><label>Foto (' + photos.length + '/' + MAX_ITEM_PHOTOS + ')</label>' +
       '<div class="photos-grid">' + photos.map(function (p, idx) {
-        var url = photoUrl(p), vid = isVideo(p);
-        return '<div class="photo-thumb">' +
+        var url = photoUrl(p), vid = isVideo(p), isCover = idx === 0;
+        return '<div class="photo-thumb' + (isCover ? " is-cover" : "") + '">' +
           (vid ? '<video src="' + escapeHtml(url) + '" class="photo-thumb-video" muted playsinline preload="metadata"></video>'
                : '<div style="background-image:url(' + escapeHtml(url) + ');width:100%;height:100%;background-size:cover;background-position:center;border-radius:inherit"></div>') +
+          (isCover ? '<div class="photo-cover-badge" title="Immagine di copertina">' + icon("star") + '</div>' : "") +
+          '<div class="photo-thumb-actions">' +
+          (idx > 0 ? '<button type="button" data-action="move-photo-left" data-index="' + idx + '" class="btn-move-photo" title="Sposta prima">' + icon("chevron-left") + '</button>' : '<span class="btn-move-photo-spacer"></span>') +
+          (idx < photos.length - 1 ? '<button type="button" data-action="move-photo-right" data-index="' + idx + '" class="btn-move-photo" title="Sposta dopo">' + icon("chevron-left", "icon-flip-h") + '</button>' : '<span class="btn-move-photo-spacer"></span>') +
+          '</div>' +
           '<button type="button" data-action="remove-photo" data-index="' + idx + '" class="btn-remove-photo">' + icon("x") + '</button></div>';
       }).join("") +
       (photos.length < MAX_ITEM_PHOTOS ? '<label class="photo-upload"><input type="file" id="photo-input" accept="image/*,video/*" multiple style="display:none"/>' + icon("image") + ' Carica foto/video</label>' : '') +
-      '</div></div>' +
+      '</div>' + (photos.length > 1 ? '<p class="photos-hint">La prima foto è l\'immagine di copertina: usa le frecce per riordinarle.</p>' : '') + '</div>' +
       '<div class="modal-footer"><button type="submit" class="btn-primary block">Aggiungi</button></div>' +
       '</form></div>';
   }
@@ -1248,14 +1287,19 @@
       '<div class="field"><label>Nome</label><input id="edit-item-name" type="text" placeholder="Es: Bicicletta blu" value="' + escapeHtml(state.editItemName) + '"/></div>' +
       '<div class="photos-section"><label>Foto (' + photos.length + '/' + MAX_ITEM_PHOTOS + ')</label>' +
       '<div class="photos-grid">' + photos.map(function (p, idx) {
-        var url = photoUrl(p), vid = isVideo(p);
-        return '<div class="photo-thumb">' +
+        var url = photoUrl(p), vid = isVideo(p), isCover = idx === 0;
+        return '<div class="photo-thumb' + (isCover ? " is-cover" : "") + '">' +
           (vid ? '<video src="' + escapeHtml(url) + '" class="photo-thumb-video" muted playsinline preload="metadata"></video>'
                : '<div style="background-image:url(' + escapeHtml(url) + ');width:100%;height:100%;background-size:cover;background-position:center;border-radius:inherit"></div>') +
+          (isCover ? '<div class="photo-cover-badge" title="Immagine di copertina">' + icon("star") + '</div>' : "") +
+          '<div class="photo-thumb-actions">' +
+          (idx > 0 ? '<button type="button" data-action="move-edit-photo-left" data-index="' + idx + '" class="btn-move-photo" title="Sposta prima">' + icon("chevron-left") + '</button>' : '<span class="btn-move-photo-spacer"></span>') +
+          (idx < photos.length - 1 ? '<button type="button" data-action="move-edit-photo-right" data-index="' + idx + '" class="btn-move-photo" title="Sposta dopo">' + icon("chevron-left", "icon-flip-h") + '</button>' : '<span class="btn-move-photo-spacer"></span>') +
+          '</div>' +
           '<button type="button" data-action="remove-edit-photo" data-index="' + idx + '" class="btn-remove-photo">' + icon("x") + '</button></div>';
       }).join("") +
       (photos.length < MAX_ITEM_PHOTOS ? '<label class="photo-upload"><input type="file" id="photo-input-edit" accept="image/*,video/*" multiple style="display:none"/>' + icon("image") + ' Carica foto/video</label>' : '') +
-      '</div></div>' +
+      '</div>' + (photos.length > 1 ? '<p class="photos-hint">La prima foto è l\'immagine di copertina: usa le frecce per riordinarle.</p>' : '') + '</div>' +
       '<div class="modal-footer"><button type="submit" class="btn-primary block">Salva Modifiche</button></div>' +
       '</form></div>';
   }
@@ -1509,7 +1553,8 @@
         '<div class="chat-trade-title">' + icon("swap") + ' Proposta di scambio</div>' +
         '<div class="chat-trade-row"><span class="chat-trade-label">Vuole:</span> ' + want + '</div>' +
         '<div class="chat-trade-row"><span class="chat-trade-label">Offre:</span> ' + offer + '</div>' +
-        '<div class="chat-trade-status">' + (status === "accepted" ? "Accettato" : status === "declined" ? "Rifiutato" : status === "expired" ? "Scaduto" : "In attesa") + '</div>';
+        '<div class="chat-trade-status">' + (status === "accepted" ? "Accettato" : status === "declined" ? "Rifiutato" : status === "expired" ? "Scaduto" : "In attesa") + '</div>' +
+        (status === "pending" ? renderTradeExpiryBadge(trade, "chat-trade-expiry") : "");
       if (status === "pending" && trade) {
         if (isRecipient) {
           html += '<div class="trade-actions-inline"><button type="button" data-action="accept-trade" data-id="' + escapeHtml(trade.id) + '" class="btn-primary btn-sm">' + icon("check") + ' Accetta</button>' +
@@ -1688,6 +1733,7 @@
         return '<div class="trade-card ' + statusClass + '">' +
           '<div class="trade-header"><span>' + (isSender ? "A: " : "Da: ") + other + '</span>' +
           '<span class="trade-status">' + statusLabel + '</span></div>' +
+          (!t.accepted && !t.declined ? renderTradeExpiryBadge(t, "trade-expiry") : "") +
           ((t.wantNames && t.wantNames.length) || (t.offerNames && t.offerNames.length)
             ? '<div class="chat-trade-row"><span class="chat-trade-label">' + (isSender ? "Volevi:" : "Vuole:") + '</span> ' + (t.wantNames || []).map(escapeHtml).join(", ") + '</div>' +
               '<div class="chat-trade-row"><span class="chat-trade-label">' + (isSender ? "Offrivi:" : "Offre:") + '</span> ' + (t.offerNames || []).map(escapeHtml).join(", ") + '</div>'
@@ -1882,6 +1928,13 @@
       var idx = parseInt(t.dataset.index, 10);
       if (!isNaN(idx)) { state.editItemPhotos.splice(idx, 1); render(); }
     }
+    /* riordino delle foto: la prima della lista e' quella usata come copertina/immagine
+       profilo dell'oggetto ovunque nell'app (community, inventario, card di scambio, ecc.),
+       quindi spostare una foto in prima posizione la rende automaticamente la copertina */
+    else if (action === "move-photo-left") { swapPhotos(state.newItemPhotos, parseInt(t.dataset.index, 10), -1); }
+    else if (action === "move-photo-right") { swapPhotos(state.newItemPhotos, parseInt(t.dataset.index, 10), 1); }
+    else if (action === "move-edit-photo-left") { swapPhotos(state.editItemPhotos, parseInt(t.dataset.index, 10), -1); }
+    else if (action === "move-edit-photo-right") { swapPhotos(state.editItemPhotos, parseInt(t.dataset.index, 10), 1); }
     else if (action === "delete-item") { deleteItem(t.dataset.id); }
     else if (action === "open-user") { openUser(t.dataset.username); }
     else if (action === "back-to-community") { backToCommunity(); }
