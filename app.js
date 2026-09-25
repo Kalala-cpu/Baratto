@@ -352,10 +352,14 @@
   }
 
   function resolveProfile(fbUser) {
-    dbGet("users/" + fbUser.email.toLowerCase()).then(function (profile) {
+    dbGet("profiles/" + fbUser.uid).then(function (profile) {
       var uname = profile && profile.username;
       if (uname) { setState({ currentUser: uname }); loadInventory(); loadCommunity(); loadFriends(); loadTrades(); }
       else { setState({ needUsername: true, usernameInput: "" }); }
+      render();
+    }).catch(function (err) {
+      /* non lasciare l'app bloccata sulla schermata di caricamento se la lettura fallisce */
+      setState({ needUsername: false, authError: dbErrorMessage(err, "Impossibile caricare il profilo: " + err.message) });
       render();
     });
   }
@@ -365,11 +369,11 @@
     var u = (state.usernameInput || "").trim();
     if (!USERNAME_RE.test(u)) { setState({ authError: "Nome: 3-20 char, lettere/numeri/_" }); render(); return; }
     var uLower = u.toLowerCase();
-    dbGet("users/" + uLower).then(function (existing) {
+    dbGet("usernames/" + uLower).then(function (existing) {
       if (existing) { setState({ authError: "Nome già in uso." }); render(); return; }
       var fbUser = fbAuth.currentUser;
-      return dbSet("users/" + fbUser.email.toLowerCase(), { username: u }).then(function () {
-        return dbSet("users/" + uLower, { email: fbUser.email, username: u });
+      return dbSet("usernames/" + uLower, { uid: fbUser.uid, username: u }).then(function () {
+        return dbSet("profiles/" + fbUser.uid, { username: u });
       }).then(function () {
         setState({ currentUser: u, needUsername: false });
         loadInventory();
@@ -803,8 +807,9 @@
     render();
     fbAuth.onAuthStateChanged(function (fbUser) {
       state.booting = false;
-      if (!fbUser) { render(); return; }
-      if (state.currentUser || state.needUsername) { render(); return; }
+      render();
+      if (!fbUser) return;
+      if (state.currentUser || state.needUsername) return;
       resolveProfile(fbUser);
     });
     completeEmailLinkSignIn();
