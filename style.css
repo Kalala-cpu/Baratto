@@ -815,6 +815,52 @@ input { font-family: inherit; }
 }
 
 /* =======================================================================
+   AGGIUNTE PER I BUG FIX
+   ======================================================================= */
+
+/* flip orizzontale per l'icona "next" del lightbox */
+.icon-flip-h { transform: scaleX(-1); }
+
+/* thumbnail video negli item card */
+.item-thumb-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  border-radius: inherit;
+}
+
+/* thumbnail video nella griglia foto del modale */
+.photo-thumb { position: relative; overflow: hidden; }
+.photo-thumb-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  border-radius: inherit;
+}
+
+/* video nel lightbox */
+.lightbox-video {
+  max-width: min(90vw, 800px);
+  max-height: 80vh;
+  border-radius: var(--radius);
+  outline: none;
+}
+
+/* pulsanti azione inline nelle trade card */
+.trade-actions-inline {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.6rem;
+  flex-wrap: wrap;
+}
+.btn-sm {
+  padding: 0.3rem 0.75rem;
+  font-size: 0.8rem;
+}
+
+/* =======================================================================
    TEMA SCURO (rispetta le preferenze di sistema)
    ======================================================================= */
 @media (prefers-color-scheme: dark) {
