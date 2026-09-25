@@ -26,7 +26,8 @@
     "chevron-left": '<path d="M14.5 6L8.5 12l6 6"/>',
     refresh: '<path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v5h-5"/>',
     gift: '<rect x="4" y="9.5" width="16" height="10.5" rx="1"/><path d="M4 13.5h16"/><path d="M12 9.5V20"/><path d="M12 9.5c-1.5 0-3-1-3-2.75S10.3 4 12 5.5c1.7-1.5 3-.75 3 1.25S13.5 9.5 12 9.5z"/>',
-    search: '<circle cx="11" cy="11" r="7.5"/><path d="M21 21l-4.7-4.7"/>'
+    search: '<circle cx="11" cy="11" r="7.5"/><path d="M21 21l-4.7-4.7"/>',
+    message: '<path d="M4 5.5h16a1 1 0 0 1 1 1v9.5a1 1 0 0 1-1 1H9.5L5 21v-4H4a1 1 0 0 1-1-1v-9.5a1 1 0 0 1 1-1z"/>'
   };
   function icon(name, extra) {
     return '<svg class="icon ' + (extra || "") + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">' + (ICON_PATHS[name] || "") + "</svg>";
@@ -185,7 +186,10 @@
     allTrades: [],
     friends: [],
     friendInput: "",
-    lightbox: null
+    lightbox: null,
+    chatFriend: null,
+    chatMessages: [],
+    chatInput: ""
   };
 
   function setState(changes) { Object.assign(state, changes); }
@@ -386,6 +390,7 @@
     fbAuth.signInWithPopup(provider).catch(function (err) { setState({ authError: authErrorMessage(err) }); render(); });
   }
   function handleLogout() {
+    detachChat();
     fbAuth.signOut().then(function () {
       setState({
         currentUser: "",
@@ -422,7 +427,10 @@
         allTrades: [],
         friends: [],
         friendInput: "",
-        lightbox: null
+        lightbox: null,
+        chatFriend: null,
+        chatMessages: [],
+        chatInput: ""
       });
       render();
     });
@@ -526,6 +534,59 @@
   function openUser(username) { setState({ selectedUser: username, otherUserInventory: [], tab: "community" }); getInventory(username.toLowerCase()).then(function (inv) { setState({ otherUserInventory: inv }); render(); }); render(); }
   function backToCommunity() { setState({ selectedUser: null, otherUserInventory: [] }); render(); }
   function openFriend(username) { openUser(username); setState({ tab: "community" }); render(); }
+
+  /* ============ chat privata ============ */
+  var chatRef = null; /* riferimento Firebase attivo, per poterlo staccare (off) quando si cambia chat */
+  /* id univoco e stabile per la coppia di utenti, indipendente da chi apre la chat per primo */
+  function chatIdFor(u1, u2) {
+    return [String(u1 || "").toLowerCase(), String(u2 || "").toLowerCase()].sort().join("__");
+  }
+  function detachChat() {
+    if (chatRef) { chatRef.off("value"); chatRef = null; }
+  }
+  function openChat(username) {
+    if (!username) return;
+    detachChat();
+    setState({ tab: "chat", chatFriend: username, chatMessages: [], chatInput: "" });
+    render();
+    var id = chatIdFor(state.currentUser, username);
+    chatRef = fbDb.ref("chats/" + id + "/messages");
+    chatRef.on("value", function (snap) {
+      var msgs = toArray(snap.val()).sort(function (a, b) { return (a.created || 0) - (b.created || 0); });
+      setState({ chatMessages: msgs });
+      render();
+      scrollChatToBottom();
+    }, function (err) {
+      setMessage(dbErrorMessage(err, "Errore chat: " + err.message), "error");
+    });
+  }
+  function closeChat() { detachChat(); setState({ chatFriend: null, chatMessages: [], chatInput: "" }); render(); }
+  function scrollChatToBottom() {
+    setTimeout(function () {
+      var el = document.getElementById("chat-messages");
+      if (el) el.scrollTop = el.scrollHeight;
+    }, 0);
+  }
+  function sendChatMessage(e) {
+    e.preventDefault();
+    var text = (state.chatInput || "").trim();
+    if (!text || !state.chatFriend) return;
+    var id = chatIdFor(state.currentUser, state.chatFriend);
+    var msgId = genId();
+    var msg = { id: msgId, from: state.currentUser, text: text, created: Date.now() };
+    setState({ chatInput: "" });
+    render();
+    dbSet("chats/" + id + "/messages/" + msgId, msg).catch(function (err) {
+      setMessage(dbErrorMessage(err, "Errore invio: " + err.message), "error");
+    });
+  }
+  function formatChatTime(ts) {
+    if (!ts) return "";
+    var d = new Date(ts);
+    var hh = d.getHours().toString().padStart(2, "0");
+    var mm = d.getMinutes().toString().padStart(2, "0");
+    return hh + ":" + mm;
+  }
 
   /* ============ trades ============ */
   function toggleWant(id) { var i = state.wantIds.indexOf(id); if (i >= 0) state.wantIds.splice(i, 1); else state.wantIds.push(id); render(); }
@@ -776,9 +837,49 @@
     var html = '<div class="page-header"><h2>Amici</h2></div><form id="add-friend-form" class="friend-add"><div class="field"><label>Aggiungi amico</label><input id="friend-username" type="text" placeholder="Nome utente" value="' + escapeHtml(state.friendInput) + '"/></div><button type="submit" class="btn-primary">Aggiungi</button></form>';
     if (incoming.length) { html += '<div class="section-title">Richieste in sospeso</div>' + incoming.map(function (r) { return '<div class="friend-card"><div class="who"><div>' + icon("user") + '</div><div><div class="name">' + escapeHtml(r.username || "") + '</div></div></div><div class="friend-actions"><button type="button" data-action="accept-friend" data-id="' + escapeHtml(r.id) + '" class="btn-ghost friend-accept">' + icon("user-check") + '</button><button type="button" data-action="decline-friend" data-id="' + escapeHtml(r.id) + '" class="btn-ghost">' + icon("x") + '</button></div></div>'; }).join(""); }
     if (outgoing.length) { html += '<div class="section-title">Richieste inviate</div>' + outgoing.map(function (r) { return '<div class="friend-card"><div class="who"><div>' + icon("user") + '</div><div><div class="name">' + escapeHtml(r.username || "") + '</div></div></div><div class="friend-actions"><span class="pill-muted">In attesa</span><button type="button" data-action="cancel-friend-request" data-id="' + escapeHtml(r.id) + '" class="btn-ghost">' + icon("x") + '</button></div></div>'; }).join(""); }
-    if (accepted.length) { html += '<div class="section-title">Amici</div>' + accepted.map(function (f) { return '<div class="friend-card"><div class="who"><div>' + icon("user") + '</div><div><div class="name">' + escapeHtml(f.username || "") + '</div></div></div><div class="friend-actions"><button type="button" data-action="open-friend" data-username="' + escapeHtml(f.username || "") + '" class="btn-ghost">' + icon("inbox") + '</button><button type="button" data-action="remove-friend" data-id="' + escapeHtml(f.id) + '" data-username="' + escapeHtml(f.username || "") + '" class="btn-ghost">' + icon("x") + '</button></div></div>'; }).join(""); }
+    if (accepted.length) { html += '<div class="section-title">Amici</div>' + accepted.map(function (f) { return '<div class="friend-card"><div class="who"><div>' + icon("user") + '</div><div><div class="name">' + escapeHtml(f.username || "") + '</div></div></div><div class="friend-actions"><button type="button" data-action="open-chat" data-username="' + escapeHtml(f.username || "") + '" class="btn-ghost" title="Chat">' + icon("message") + '</button><button type="button" data-action="open-friend" data-username="' + escapeHtml(f.username || "") + '" class="btn-ghost" title="Inventario">' + icon("inbox") + '</button><button type="button" data-action="remove-friend" data-id="' + escapeHtml(f.id) + '" data-username="' + escapeHtml(f.username || "") + '" class="btn-ghost">' + icon("x") + '</button></div></div>'; }).join(""); }
     if (!incoming.length && !outgoing.length && !accepted.length) { html += '<div class="empty-state"><p>Nessun amico ancora. Inizia ad aggiungerne!</p></div>'; }
     return html;
+  }
+
+  function renderChatListTab() {
+    var accepted = state.friends.filter(function (f) { return f.status === "accepted"; });
+    var html = '<div class="page-header"><h2>Chat</h2></div>';
+    if (!accepted.length) {
+      html += '<div class="empty-state"><p>Aggiungi qualche amico per iniziare a chattare.</p></div>';
+    } else {
+      html += '<div class="chat-friend-list">' + accepted.map(function (f) {
+        return '<div class="chat-friend-card" data-action="open-chat" data-username="' + escapeHtml(f.username || "") + '">' +
+          '<div class="who"><div>' + icon("user") + '</div><div><div class="name">' + escapeHtml(f.username || "") + '</div></div></div>' +
+          icon("message") + '</div>';
+      }).join("") + '</div>';
+    }
+    return html;
+  }
+
+  function renderChatThread() {
+    var html = '<div class="chat-thread">';
+    html += '<div class="chat-thread-header"><button type="button" data-action="close-chat" class="btn-icon-left">' + icon("chevron-left") + ' Indietro</button><h2>' + escapeHtml(state.chatFriend) + '</h2></div>';
+    html += '<div class="chat-messages" id="chat-messages">';
+    if (!state.chatMessages.length) {
+      html += '<div class="empty-state"><p>Nessun messaggio ancora. Scrivi il primo!</p></div>';
+    } else {
+      html += state.chatMessages.map(function (m) {
+        var own = sameUser(m.from, state.currentUser);
+        return '<div class="chat-bubble-row ' + (own ? "own" : "") + '"><div class="chat-bubble">' +
+          '<div class="chat-bubble-text">' + escapeHtml(m.text) + '</div>' +
+          '<div class="chat-bubble-time">' + formatChatTime(m.created) + '</div>' +
+          '</div></div>';
+      }).join("");
+    }
+    html += '</div>';
+    html += '<form id="chat-form" class="chat-form"><input id="chat-input" type="text" autocomplete="off" placeholder="Scrivi un messaggio..." value="' + escapeHtml(state.chatInput) + '"/><button type="submit" class="btn-icon" title="Invia">' + icon("send") + '</button></form>';
+    html += '</div>';
+    return html;
+  }
+
+  function renderChatTab() {
+    return state.chatFriend ? renderChatThread() : renderChatListTab();
   }
 
   function renderTradesTab() {
@@ -835,11 +936,13 @@
     var tabsHtml = '<button type="button" data-action="switch-tab" data-tab="inventory" class="' + (state.tab === "inventory" ? "active" : "") + '">' + icon("package") + ' Inventario</button>' +
       '<button type="button" data-action="switch-tab" data-tab="community" class="' + (state.tab === "community" ? "active" : "") + '">' + icon("users") + ' Community</button>' +
       '<button type="button" data-action="switch-tab" data-tab="friends" class="' + (state.tab === "friends" ? "active" : "") + '">' + icon("user-plus") + ' Amici</button>' +
+      '<button type="button" data-action="switch-tab" data-tab="chat" class="' + (state.tab === "chat" ? "active" : "") + '">' + icon("message") + ' Chat</button>' +
       '<button type="button" data-action="switch-tab" data-tab="trades" class="' + (state.tab === "trades" ? "active" : "") + '">' + icon("swap") + ' Scambi</button>';
     var tabContent = '';
     if (state.tab === "inventory") tabContent = renderInventoryTab();
     else if (state.tab === "community") tabContent = state.selectedUser ? renderOtherUserView() : renderCommunityTab();
     else if (state.tab === "friends") tabContent = renderFriendsTab();
+    else if (state.tab === "chat") tabContent = renderChatTab();
     else if (state.tab === "trades") tabContent = renderTradesTab();
 
     return '' +
@@ -855,14 +958,20 @@
       renderLightbox();
   }
 
-  function switchTab(tab) { setState({ tab: tab, selectedUser: null, otherUserInventory: [] }); render(); }
+  function switchTab(tab) {
+    if (state.tab === "chat" && tab !== "chat") detachChat();
+    var changes = { tab: tab, selectedUser: null, otherUserInventory: [] };
+    if (tab === "chat") { detachChat(); changes.chatFriend = null; changes.chatMessages = []; }
+    setState(changes);
+    render();
+  }
 
   function render() {
     if (state.booting) {
       document.getElementById("app").innerHTML = '<div class="auth-wrap"><div class="auth-box" style="text-align:center;">' + icon("loader", "spin-sm") + "</div></div>";
       return;
     }
-    var FOCUS_PRESERVE_IDS = ["friend-username", "community-search", "inventory-search", "history-search"];
+    var FOCUS_PRESERVE_IDS = ["friend-username", "community-search", "inventory-search", "history-search", "chat-input"];
     var active = document.activeElement;
     var keepFocusId = (active && FOCUS_PRESERVE_IDS.indexOf(active.id) !== -1) ? active.id : null;
     var selStart = keepFocusId ? active.selectionStart : null, selEnd = keepFocusId ? active.selectionEnd : null;
@@ -911,6 +1020,8 @@
     else if (action === "cancel-friend-request") { cancelFriendRequest(t.dataset.id); }
     else if (action === "remove-friend") { removeFriend(t.dataset.id, t.dataset.username); }
     else if (action === "open-friend") { openFriend(t.dataset.username); }
+    else if (action === "open-chat") { openChat(t.dataset.username); }
+    else if (action === "close-chat") { closeChat(); }
     else if (action === "open-trade-builder") { state.showTradeBuilder = true; render(); }
     else if (action === "cancel-trade-builder") { state.showTradeBuilder = false; state.wantIds = []; state.offerIds = []; render(); }
     else if (action === "toggle-want") { toggleWant(t.dataset.id); }
@@ -934,6 +1045,7 @@
     else if (e.target && e.target.id === "edit-item-form") submitEditItem(e);
     else if (e.target && e.target.id === "username-form") handleClaimUsername(e);
     else if (e.target && e.target.id === "add-friend-form") handleAddFriendSubmit(e);
+    else if (e.target && e.target.id === "chat-form") sendChatMessage(e);
   });
 
   document.addEventListener("change", function (e) {
@@ -951,6 +1063,7 @@
     else if (e.target && e.target.id === "community-search") { state.communitySearch = e.target.value; render(); }
     else if (e.target && e.target.id === "inventory-search") { state.inventorySearch = e.target.value; syncSearchBox(e.target); updateInventoryResults(); }
     else if (e.target && e.target.id === "history-search") { state.historySearch = e.target.value; state.historyLimit = HISTORY_PAGE; syncSearchBox(e.target); updateHistory(); }
+    else if (e.target && e.target.id === "chat-input") { state.chatInput = e.target.value; }
   });
 
   document.addEventListener("keydown", function (e) {
@@ -982,6 +1095,7 @@
       state.booting = false;
       if (!fbUser) {
         /* user signed out: clear everything so the auth screen shows */
+        detachChat();
         setState({
           currentUser: "",
           needUsername: false,
@@ -1017,7 +1131,10 @@
           allTrades: [],
           friends: [],
           friendInput: "",
-          lightbox: null
+          lightbox: null,
+          chatFriend: null,
+          chatMessages: [],
+          chatInput: ""
         });
         render();
         return;
