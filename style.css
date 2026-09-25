@@ -1366,3 +1366,69 @@ input { font-family: inherit; }
   .btn-primary { color: #241a0d; }
   .lightbox-overlay { background: rgba(0, 0, 0, 0.92); }
 }
+
+/* =======================================================================
+   NUOVE FUNZIONALITA' — filtri scambi, durata proposta, messaggi di sistema
+   ======================================================================= */
+
+/* select riusato per i filtri storico e per la durata della proposta:
+   stessa base visiva dei campi <input> di .field */
+.field select,
+.history-adv-filters select {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 0.65rem 0.8rem;
+  font-size: 0.95rem;
+  background: var(--paper);
+  color: var(--ink);
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.field select:focus,
+.history-adv-filters select:focus {
+  border-color: var(--brass);
+  box-shadow: 0 0 0 3px rgba(181, 121, 47, 0.15);
+}
+
+.trade-duration-field { margin-top: 1.25rem; max-width: 260px; }
+
+/* filtro per utente/data nella tab Scambi */
+.history-adv-filters {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-bottom: 1.1rem;
+}
+.history-adv-filters .field { margin-bottom: 0; min-width: 150px; flex: 1 1 150px; }
+.history-adv-filters .field select,
+.history-adv-filters .field input { min-width: 0; }
+.history-adv-clear { flex-shrink: 0; margin-bottom: 0.05rem; }
+
+/* stato "scaduto" per le proposte di scambio, sia nella tab Scambi che in chat */
+.trade-card.expired { border-left-color: var(--ink-soft); }
+.trade-card.expired .trade-status { background: var(--line); color: var(--ink-soft); }
+.chat-trade-card.expired { border-color: var(--line); }
+.chat-trade-card.expired .chat-trade-status { color: var(--ink-soft); }
+
+/* messaggio di sistema in chat (esito di uno scambio): centrato, neutro,
+   distinto dalle normali bolle di testo */
+.chat-system-row { display: flex; justify-content: center; margin: 0.15rem 0; }
+.chat-system-msg {
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: var(--ink-soft);
+  background: var(--cream);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0.3rem 0.8rem;
+  text-align: center;
+  max-width: 85%;
+}
+
+@media (max-width: 480px) {
+  .history-adv-filters { gap: 0.6rem; }
+  .history-adv-filters .field { flex: 1 1 100%; }
+  .history-adv-clear { width: 100%; justify-content: center; }
+}
