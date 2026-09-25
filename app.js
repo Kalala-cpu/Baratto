@@ -101,13 +101,18 @@
   var HISTORY_PAGE = 12; /* scambi mostrati per volta nello storico */
   function genId() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
 
-  /* foto: supporta sia i vecchi oggetti con "photo" (singola) sia i nuovi con "photos" (array) */
+  /* foto: supporta sia i vecchi oggetti con "photo" (singola) sia i nuovi con "photos" (array).
+     Ogni elemento può essere una stringa (data URL immagine) oppure {url, type:"video"} */
   function itemPhotos(item) {
     if (!item) return [];
     if (Array.isArray(item.photos)) return item.photos;
     if (item.photo) return [item.photo];
     return [];
   }
+  /* restituisce l'URL stringa di un elemento foto/video */
+  function photoUrl(p) { return (p && typeof p === "object") ? p.url : p; }
+  /* true se l'elemento è un video */
+  function isVideo(p) { return p && typeof p === "object" && p.type === "video"; }
   /* un oggetto senza il campo "available" è considerato disponibile (retrocompatibilità) */
   function isAvailable(item) {
     return !!item && item.available !== false;
@@ -176,6 +181,7 @@
     historyLimit: HISTORY_PAGE,
     historySearch: "",
     history: [],
+    allTrades: [],
     friends: [],
     friendInput: "",
     lightbox: null
@@ -195,16 +201,42 @@
   function closeEditItem() { setState({ showEditItem: false, editItemId: null, editItemName: "", editItemPhotos: [] }); render(); }
 
   function handleFileChange(e) {
-    var file = e.target.files[0];
-    if (!file) return;
-    var isEditing = state.showEditItem;
+    var files = Array.prototype.slice.call(e.target.files);
+    if (!files.length) return;
+    /* reset the input so the same file(s) can be selected again later */
+    e.target.value = "";
+    var isEditing = e.target.id === "photo-input-edit";
     var targetPhotos = isEditing ? state.editItemPhotos : state.newItemPhotos;
-    if (targetPhotos.length >= MAX_ITEM_PHOTOS) { setMessage("Massimo " + MAX_ITEM_PHOTOS + " foto per oggetto.", "error"); return; }
-    resizeImageFile(file).then(function (blob) {
-      var reader = new FileReader();
-      reader.onload = function (ev) { targetPhotos.push(ev.target.result); render(); };
-      reader.readAsDataURL(blob);
-    }).catch(function (err) { setMessage(err.message, "error"); });
+    var remaining = MAX_ITEM_PHOTOS - targetPhotos.length;
+    if (remaining <= 0) { setMessage("Massimo " + MAX_ITEM_PHOTOS + " foto per oggetto.", "error"); return; }
+    /* only process up to the number of remaining slots */
+    var toProcess = files.slice(0, remaining);
+    if (files.length > remaining) { setMessage("Aggiunte solo " + remaining + " foto (limite " + MAX_ITEM_PHOTOS + ").", "error"); }
+    var errors = [];
+    toProcess.reduce(function (chain, file) {
+      return chain.then(function () {
+        if (file.type && file.type.indexOf("video/") === 0) {
+          /* video: store as data URL directly (no resize) */
+          return new Promise(function (resolve) {
+            var reader = new FileReader();
+            reader.onload = function (ev) { targetPhotos.push({ url: ev.target.result, type: "video" }); resolve(); };
+            reader.onerror = function () { errors.push(file.name); resolve(); };
+            reader.readAsDataURL(file);
+          });
+        }
+        return resizeImageFile(file).then(function (blob) {
+          return new Promise(function (resolve) {
+            var reader = new FileReader();
+            reader.onload = function (ev) { targetPhotos.push(ev.target.result); resolve(); };
+            reader.onerror = function () { errors.push(file.name); resolve(); };
+            reader.readAsDataURL(blob);
+          });
+        }).catch(function (err) { errors.push(file.name + ": " + err.message); });
+      });
+    }, Promise.resolve()).then(function () {
+      if (errors.length) { setMessage("Errore con: " + errors.join(", "), "error"); }
+      render();
+    });
   }
 
   /* ============ add item ============ */
@@ -283,7 +315,7 @@
       render();
     });
   }
-  function loadTrades() { dbGet("trades").then(function (trades) { var all = toArray(trades); setState({ history: all }); updateHistory(); }); }
+  function loadTrades() { dbGet("trades").then(function (trades) { var all = toArray(trades); setState({ allTrades: all, history: all }); updateHistory(); }); }
   /* carica sia gli amici confermati (users/{u}/friends) sia le richieste pendenti
      (friendRequests), in entrata e in uscita, cosi' la tab Amici puo' mostrarle tutte */
   function loadFriends() {
@@ -294,21 +326,31 @@
     ]).then(function (results) {
       var accepted = toArray(results[0]).map(function (f) { return Object.assign({}, f, { status: "accepted" }); });
       var allRequests = toArray(results[1]);
-      var incoming = allRequests.filter(function (r) { return sameUser(r.to, state.currentUser); })
-        .map(function (r) { return { id: r.id, username: r.from, status: "pending" }; });
-      var outgoing = allRequests.filter(function (r) { return sameUser(r.from, state.currentUser); })
-        .map(function (r) { return { id: r.id, username: r.to, status: "outgoing" }; });
+      /* sendFriendRequest saves {from, to, ...} — handle both old and new field names */
+      var incoming = allRequests.filter(function (r) {
+        return sameUser(r.toUser || r.to, state.currentUser);
+      }).map(function (r) { return { id: r.id, username: r.fromUser || r.from, status: "pending" }; });
+      var outgoing = allRequests.filter(function (r) {
+        return sameUser(r.fromUser || r.from, state.currentUser);
+      }).map(function (r) { return { id: r.id, username: r.toUser || r.to, status: "outgoing" }; });
       setState({ friends: accepted.concat(incoming, outgoing) });
       render();
     });
   }
   function updateHistory() {
     var search = (state.historySearch || "").toLowerCase(), filter = state.historyFilter;
-    var h = state.history.filter(function (t) {
-      var matchSearch = !search || (t.from || "").toLowerCase().indexOf(search) !== -1 || (t.to || "").toLowerCase().indexOf(search) !== -1;
+    /* always filter from the full unmodified trade list */
+    var source = state.allTrades || state.history || [];
+    var h = source.filter(function (t) {
+      var matchSearch = !search ||
+        (t.from || "").toLowerCase().indexOf(search) !== -1 ||
+        (t.fromUser || "").toLowerCase().indexOf(search) !== -1 ||
+        (t.to || "").toLowerCase().indexOf(search) !== -1 ||
+        (t.toUser || "").toLowerCase().indexOf(search) !== -1;
       var matchFilter = filter === "completed" ? t.accepted : filter === "pending" ? !t.accepted && !t.declined : t.declined;
       return matchSearch && matchFilter;
-    }).sort(function (a, b) { return (b.created || 0) - (a.created || 0); }).slice(0, state.historyLimit);
+    }).sort(function (a, b) { return (b.created || 0) - (a.created || 0); });
+    /* store filtered result separately so state.allTrades stays intact */
     setState({ history: h });
     render();
   }
@@ -329,7 +371,47 @@
     var provider = new firebase.auth.GoogleAuthProvider();
     fbAuth.signInWithPopup(provider).catch(function (err) { setState({ authError: authErrorMessage(err) }); render(); });
   }
-  function handleLogout() { fbAuth.signOut(); }
+  function handleLogout() {
+    fbAuth.signOut().then(function () {
+      setState({
+        currentUser: "",
+        needUsername: false,
+        usernameInput: "",
+        tab: "inventory",
+        message: null,
+        authMode: "login",
+        authEmail: "",
+        authPassword: "",
+        authError: "",
+        linkSentTo: null,
+        showAddItem: false,
+        newItemName: "",
+        newItemPhotos: [],
+        showEditItem: false,
+        editItemId: null,
+        editItemName: "",
+        editItemPhotos: [],
+        inventory: [],
+        inventorySearch: "",
+        showTradeBuilder: false,
+        wantIds: [],
+        offerIds: [],
+        community: [],
+        communitySearch: "",
+        selectedUser: null,
+        otherUserInventory: [],
+        historyFilter: "completed",
+        historyLimit: HISTORY_PAGE,
+        historySearch: "",
+        history: [],
+        allTrades: [],
+        friends: [],
+        friendInput: "",
+        lightbox: null
+      });
+      render();
+    });
+  }
 
   function sendEmailLink(email) {
     fbAuth.sendSignInLinkToEmail(email, { url: window.location.href, handleCodeInApp: true }).then(function () {
@@ -388,18 +470,22 @@
   /* ============ community & friends ============ */
   function sendFriendRequest(username) {
     var id = genId();
-    var req = { id: id, from: state.currentUser, to: username, created: Date.now() };
+    /* field names must match the DB rules: fromUser / toUser */
+    var req = { id: id, fromUser: state.currentUser, toUser: username, status: "pending", created: Date.now() };
     dbSet("friendRequests/" + id, req).then(function () { setMessage("Richiesta inviata.", "success"); loadFriends(); }).catch(function (err) { setMessage("Errore: " + dbErrorMessage(err, err.message), "error"); });
   }
 
   function respondFriendRequest(reqId, accept) {
     dbGet("friendRequests/" + reqId).then(function (req) {
       if (!req) return;
-      var u1 = req.from.toLowerCase(), u2 = req.to.toLowerCase();
+      /* support both old (from/to) and new (fromUser/toUser) field names */
+      var fromU = req.fromUser || req.from;
+      var toU = req.toUser || req.to;
+      var u1 = fromU.toLowerCase(), u2 = toU.toLowerCase();
       if (accept) {
         return Promise.all([
-          dbGet("users/" + u1 + "/friends").then(function (f) { var arr = toArray(f); if (!arr.find(function (x) { return x && x.username === req.to; })) arr.push({ username: req.to, id: genId() }); return dbSet("users/" + u1 + "/friends", arr); }),
-          dbGet("users/" + u2 + "/friends").then(function (f) { var arr = toArray(f); if (!arr.find(function (x) { return x && x.username === req.from; })) arr.push({ username: req.from, id: genId() }); return dbSet("users/" + u2 + "/friends", arr); })
+          dbGet("users/" + u1 + "/friends").then(function (f) { var arr = toArray(f); if (!arr.find(function (x) { return x && sameUser(x.username, toU); })) arr.push({ username: toU, id: genId() }); return dbSet("users/" + u1 + "/friends", arr); }),
+          dbGet("users/" + u2 + "/friends").then(function (f) { var arr = toArray(f); if (!arr.find(function (x) { return x && sameUser(x.username, fromU); })) arr.push({ username: fromU, id: genId() }); return dbSet("users/" + u2 + "/friends", arr); })
         ]);
       }
     }).then(function () {
@@ -422,7 +508,7 @@
     }).then(function () { setMessage("Amico rimosso.", "success"); loadFriends(); }).catch(function (err) { setMessage("Errore: " + err.message, "error"); });
   }
 
-  function openUser(username) { setState({ selectedUser: username, otherUserInventory: [] }); getInventory(username.toLowerCase()).then(function (inv) { setState({ otherUserInventory: inv }); render(); }); }
+  function openUser(username) { setState({ selectedUser: username, otherUserInventory: [], tab: "community" }); getInventory(username.toLowerCase()).then(function (inv) { setState({ otherUserInventory: inv }); render(); }); render(); }
   function backToCommunity() { setState({ selectedUser: null, otherUserInventory: [] }); render(); }
   function openFriend(username) { openUser(username); setState({ tab: "community" }); render(); }
 
@@ -497,8 +583,14 @@
       '<form id="add-item-form" class="modal-body">' +
       '<div class="field"><label>Nome</label><input id="new-item-name" type="text" placeholder="Es: Bicicletta blu" value="' + escapeHtml(state.newItemName) + '"/></div>' +
       '<div class="photos-section"><label>Foto (' + photos.length + '/' + MAX_ITEM_PHOTOS + ')</label>' +
-      '<div class="photos-grid">' + photos.map(function (p, idx) { return '<div class="photo-thumb" style="background-image:url(' + p + ')"><button type="button" data-action="remove-photo" data-index="' + idx + '" class="btn-remove-photo">' + icon("x") + '</button></div>'; }).join("") +
-      (photos.length < MAX_ITEM_PHOTOS ? '<label class="photo-upload"><input type="file" id="photo-input" accept="image/*" style="display:none"/>' + icon("image") + ' Carica foto</label>' : '') +
+      '<div class="photos-grid">' + photos.map(function (p, idx) {
+        var url = photoUrl(p), vid = isVideo(p);
+        return '<div class="photo-thumb">' +
+          (vid ? '<video src="' + escapeHtml(url) + '" class="photo-thumb-video" muted playsinline preload="metadata"></video>'
+               : '<div style="background-image:url(' + escapeHtml(url) + ');width:100%;height:100%;background-size:cover;background-position:center;border-radius:inherit"></div>') +
+          '<button type="button" data-action="remove-photo" data-index="' + idx + '" class="btn-remove-photo">' + icon("x") + '</button></div>';
+      }).join("") +
+      (photos.length < MAX_ITEM_PHOTOS ? '<label class="photo-upload"><input type="file" id="photo-input" accept="image/*,video/*" multiple style="display:none"/>' + icon("image") + ' Carica foto/video</label>' : '') +
       '</div></div>' +
       '<div class="modal-footer"><button type="submit" class="btn-primary block">Aggiungi</button></div>' +
       '</form></div>';
@@ -513,8 +605,14 @@
       '<form id="edit-item-form" class="modal-body">' +
       '<div class="field"><label>Nome</label><input id="edit-item-name" type="text" placeholder="Es: Bicicletta blu" value="' + escapeHtml(state.editItemName) + '"/></div>' +
       '<div class="photos-section"><label>Foto (' + photos.length + '/' + MAX_ITEM_PHOTOS + ')</label>' +
-      '<div class="photos-grid">' + photos.map(function (p, idx) { return '<div class="photo-thumb" style="background-image:url(' + p + ')"><button type="button" data-action="remove-edit-photo" data-index="' + idx + '" class="btn-remove-photo">' + icon("x") + '</button></div>'; }).join("") +
-      (photos.length < MAX_ITEM_PHOTOS ? '<label class="photo-upload"><input type="file" id="photo-input-edit" accept="image/*" style="display:none"/>' + icon("image") + ' Carica foto</label>' : '') +
+      '<div class="photos-grid">' + photos.map(function (p, idx) {
+        var url = photoUrl(p), vid = isVideo(p);
+        return '<div class="photo-thumb">' +
+          (vid ? '<video src="' + escapeHtml(url) + '" class="photo-thumb-video" muted playsinline preload="metadata"></video>'
+               : '<div style="background-image:url(' + escapeHtml(url) + ');width:100%;height:100%;background-size:cover;background-position:center;border-radius:inherit"></div>') +
+          '<button type="button" data-action="remove-edit-photo" data-index="' + idx + '" class="btn-remove-photo">' + icon("x") + '</button></div>';
+      }).join("") +
+      (photos.length < MAX_ITEM_PHOTOS ? '<label class="photo-upload"><input type="file" id="photo-input-edit" accept="image/*,video/*" multiple style="display:none"/>' + icon("image") + ' Carica foto/video</label>' : '') +
       '</div></div>' +
       '<div class="modal-footer"><button type="submit" class="btn-primary block">Salva Modifiche</button></div>' +
       '</form></div>';
@@ -523,11 +621,15 @@
   function renderLightbox() {
     if (!state.lightbox) return "";
     var lb = state.lightbox, p = lb.photos[lb.index];
+    var mediaHtml = isVideo(p)
+      ? '<video src="' + escapeHtml(photoUrl(p)) + '" class="lightbox-video" controls autoplay loop></video>'
+      : '<img src="' + escapeHtml(photoUrl(p)) + '" alt="' + escapeHtml(lb.item.name) + '"/>';
     return '' +
       '<div id="lightbox-overlay" class="lightbox-overlay"></div>' +
-      '<div class="lightbox"><button type="button" data-action="lightbox-prev" class="lightbox-btn prev">' + icon("chevron-left") + '</button>' +
-      '<img src="' + escapeHtml(p) + '" alt="' + escapeHtml(lb.item.name) + '"/>' +
-      '<button type="button" data-action="lightbox-next" class="lightbox-btn next">' + icon("chevron-left") + '</button>' +
+      '<div class="lightbox">' +
+      (lb.photos.length > 1 ? '<button type="button" data-action="lightbox-prev" class="lightbox-btn prev">' + icon("chevron-left") + '</button>' : '') +
+      mediaHtml +
+      (lb.photos.length > 1 ? '<button type="button" data-action="lightbox-next" class="lightbox-btn next">' + icon("chevron-left", "icon-flip-h") + '</button>' : '') +
       '<button type="button" data-action="close-lightbox" class="lightbox-close">' + icon("x") + '</button>' +
       '<div class="lightbox-counter">' + (lb.index + 1) + '/' + lb.photos.length + '</div></div>';
   }
@@ -535,8 +637,17 @@
   function renderInventoryItem(item, isOwn) {
     var av = isAvailable(item), photos = itemPhotos(item);
     var html = '<div class="item-card ' + (av ? "" : "unavailable") + '">';
-    if (photos.length) { html += '<div class="item-photo" data-action="view-photos" data-id="' + escapeHtml(item.id) + '">' + (photos.length > 1 ? '<div class="photo-badge">' + photos.length + '</div>' : '') + '<img src="' + escapeHtml(photos[0]) + '" alt=""/></div>'; }
-    else { html += '<div class="item-photo-empty">' + icon("package") + '</div>'; }
+    if (photos.length) {
+      var firstPhoto = photos[0];
+      var firstUrl = photoUrl(firstPhoto);
+      var firstIsVideo = isVideo(firstPhoto);
+      html += '<div class="item-photo" data-action="view-photos" data-id="' + escapeHtml(item.id) + '" data-source="' + (isOwn ? "own" : "other") + '">' +
+        (photos.length > 1 ? '<div class="photo-badge">' + photos.length + '</div>' : '') +
+        (firstIsVideo
+          ? '<video src="' + escapeHtml(firstUrl) + '" class="item-thumb-video" muted playsinline preload="metadata"></video>'
+          : '<img src="' + escapeHtml(firstUrl) + '" alt=""/>') +
+        '</div>';
+    } else { html += '<div class="item-photo-empty">' + icon("package") + '</div>'; }
     html += '<div class="item-info"><div class="item-header"><h3>' + escapeHtml(item.name) + '</h3>';
     if (isOwn) {
       html += '<div class="item-actions">' +
@@ -575,8 +686,15 @@
       html += '<div class="empty-state"><p>Nessun oggetto disponibile al momento.</p></div>';
     } else {
       html += '<div class="items-grid">' + filtered.map(function (item) {
-        return '<div class="item-card" onclick="var action=event.target.closest(\'[data-action]\');if(action) return;' + "openUser('" + escapeHtml(item.user || "") + "');setState({tab:'community'});render();" + '">' +
-          (itemPhotos(item).length ? '<div class="item-photo"><img src="' + escapeHtml(itemPhotos(item)[0]) + '" alt=""/></div>' : '<div class="item-photo-empty">' + icon("package") + '</div>') +
+        var photos = itemPhotos(item);
+        var firstPhoto = photos[0];
+        var thumbHtml = photos.length
+          ? (isVideo(firstPhoto)
+              ? '<video src="' + escapeHtml(photoUrl(firstPhoto)) + '" class="item-thumb-video" muted playsinline preload="metadata"></video>'
+              : '<img src="' + escapeHtml(photoUrl(firstPhoto)) + '" alt=""/>')
+          : icon("package");
+        return '<div class="item-card" data-action="open-user" data-username="' + escapeHtml(item.user || "") + '">' +
+          '<div class="item-photo">' + thumbHtml + '</div>' +
           '<div class="item-info"><div class="item-header"><h3>' + escapeHtml(item.name) + '</h3><span class="item-user">' + escapeHtml(item.user || "") + '</span></div></div></div>';
       }).join("") + '</div>';
       if (filtered.length === 0) { html += '<div class="empty-state"><p>Nessun risultato.</p></div>'; }
@@ -591,8 +709,15 @@
     } else {
       html += '<div class="items-grid">' + state.otherUserInventory.filter(isAvailable).map(function (item) {
         var sel = state.wantIds.indexOf(item.id) !== -1;
+        var photos = itemPhotos(item);
+        var firstPhoto = photos[0];
+        var thumbHtml = photos.length
+          ? (isVideo(firstPhoto)
+              ? '<video src="' + escapeHtml(photoUrl(firstPhoto)) + '" class="item-thumb-video" muted playsinline preload="metadata"></video>'
+              : '<img src="' + escapeHtml(photoUrl(firstPhoto)) + '" alt=""/>')
+          : "";
         return '<div class="item-card ' + (sel ? "selected" : "") + '"><div class="item-select" data-action="toggle-want" data-id="' + escapeHtml(item.id) + '">' +
-          (itemPhotos(item).length ? '<div class="item-photo"><img src="' + escapeHtml(itemPhotos(item)[0]) + '" alt=""/></div>' : '<div class="item-photo-empty">' + icon("package") + '</div>') +
+          (photos.length ? '<div class="item-photo">' + thumbHtml + '</div>' : '<div class="item-photo-empty">' + icon("package") + '</div>') +
           '<div class="select-check">' + icon("check") + '</div>' +
           '</div><div class="item-info"><h3>' + escapeHtml(item.name) + '</h3></div></div>';
       }).join("") + '</div>';
@@ -638,7 +763,28 @@
       '</div></div>';
     html += '<div class="search-box-wrap"><input type="text" id="history-search" placeholder="Cerca..." value="' + escapeHtml(state.historySearch) + '"/>' + (state.historySearch ? '<button type="button" data-action="clear-search" data-target="history" class="btn-clear">' + icon("x") + '</button>' : '') + '</div>';
     if (state.history.length === 0) { html += '<div class="empty-state"><p>Nessuno scambio ancora.</p></div>'; }
-    else { html += '<div class="trade-history">' + state.history.slice(0, state.historyLimit).map(function (t) { var isSender = sameUser(t.from, state.currentUser); return '<div class="trade-card ' + (t.accepted ? "accepted" : t.declined ? "declined" : "pending") + '"><div class="trade-header"><span>' + (isSender ? "A: " : "Da: ") + escapeHtml(isSender ? t.to : t.from) + '</span><span class="trade-status">' + (t.accepted ? "Accettato" : t.declined ? "Rifiutato" : "In attesa") + '</span></div></div>'; }).join("") + '</div>'; if (state.history.length >= state.historyLimit) { html += '<div class="load-more"><button type="button" data-action="history-more" class="btn-ghost">Carica altri...</button></div>'; } }
+    else {
+      var visible = state.history.slice(0, state.historyLimit);
+      html += '<div class="trade-history">' + visible.map(function (t) {
+        var fromU = t.fromUser || t.from || "";
+        var toU = t.toUser || t.to || "";
+        var isSender = sameUser(fromU, state.currentUser);
+        var other = escapeHtml(isSender ? toU : fromU);
+        return '<div class="trade-card ' + (t.accepted ? "accepted" : t.declined ? "declined" : "pending") + '">' +
+          '<div class="trade-header"><span>' + (isSender ? "A: " : "Da: ") + other + '</span>' +
+          '<span class="trade-status">' + (t.accepted ? "Accettato" : t.declined ? "Rifiutato" : "In attesa") + '</span></div>' +
+          (!t.accepted && !t.declined
+            ? '<div class="trade-actions-inline">' +
+              (isSender
+                ? '<button type="button" data-action="cancel-outgoing-trade" data-id="' + escapeHtml(t.id) + '" class="btn-ghost">' + icon("x") + ' Annulla</button>'
+                : '<button type="button" data-action="accept-trade" data-id="' + escapeHtml(t.id) + '" class="btn-primary btn-sm">' + icon("check") + ' Accetta</button>' +
+                  '<button type="button" data-action="decline-trade" data-id="' + escapeHtml(t.id) + '" class="btn-ghost btn-sm">' + icon("x") + ' Rifiuta</button>') +
+              '</div>'
+            : '') +
+          '</div>';
+      }).join("") + '</div>';
+      if (state.history.length > state.historyLimit) { html += '<div class="load-more"><button type="button" data-action="history-more" class="btn-ghost">Carica altri...</button></div>'; }
+    }
     return html;
   }
 
@@ -807,8 +953,48 @@
     render();
     fbAuth.onAuthStateChanged(function (fbUser) {
       state.booting = false;
+      if (!fbUser) {
+        /* user signed out: clear everything so the auth screen shows */
+        setState({
+          currentUser: "",
+          needUsername: false,
+          usernameInput: "",
+          tab: "inventory",
+          message: null,
+          authMode: "login",
+          authEmail: "",
+          authPassword: "",
+          authError: "",
+          linkSentTo: null,
+          showAddItem: false,
+          newItemName: "",
+          newItemPhotos: [],
+          showEditItem: false,
+          editItemId: null,
+          editItemName: "",
+          editItemPhotos: [],
+          inventory: [],
+          inventorySearch: "",
+          showTradeBuilder: false,
+          wantIds: [],
+          offerIds: [],
+          community: [],
+          communitySearch: "",
+          selectedUser: null,
+          otherUserInventory: [],
+          historyFilter: "completed",
+          historyLimit: HISTORY_PAGE,
+          historySearch: "",
+          history: [],
+          allTrades: [],
+          friends: [],
+          friendInput: "",
+          lightbox: null
+        });
+        render();
+        return;
+      }
       render();
-      if (!fbUser) return;
       if (state.currentUser || state.needUsername) return;
       resolveProfile(fbUser);
     });
