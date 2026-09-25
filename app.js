@@ -92,10 +92,10 @@
     return "Errore imprevisto. Riprova.";
   }
 
-  /* messaggio d'errore per le operazioni sul database: se mancano le regole, lo dice chiaramente */
+  /* messaggio d'errore per le operazioni sul database quando le regole negano il permesso */
   function dbErrorMessage(err, fallback) {
     var denied = err && (err.code === "PERMISSION_DENIED" || /permission_denied/i.test(err.message || ""));
-    return denied ? "Permesso negato dalle regole del database: aggiungi il nodo friendRequests nelle regole di Firebase." : fallback;
+    return denied ? "Permesso negato dalle regole del database." : fallback;
   }
 
   /* ============ utilita' ============ */
@@ -512,13 +512,18 @@
     if (!fbUser) return;
     var uLower = state.currentUser.toLowerCase();
     var uid = fbUser.uid;
-    Promise.all([
-      fbDb.ref("usernames/" + uLower).remove(),
-      fbDb.ref("profiles/" + uid).remove(),
-      fbDb.ref("inventories/" + uLower).remove(),
-      fbDb.ref("users/" + uLower + "/friends").remove(),
-      fbDb.ref("loginEmails/" + uLower).remove()
-    ]).then(function () {
+    /* loginEmails/$uLower si puo' cancellare solo finche' usernames/$uLower esiste ancora
+       (le regole verificano root.child('usernames/'+uLower+'/uid') === auth.uid), quindi va
+       rimosso PRIMA di usernames: se partono insieme il permesso viene negato e l'intera
+       cancellazione fallisce senza eliminare nulla. */
+    fbDb.ref("loginEmails/" + uLower).remove().then(function () {
+      return Promise.all([
+        fbDb.ref("usernames/" + uLower).remove(),
+        fbDb.ref("profiles/" + uid).remove(),
+        fbDb.ref("inventories/" + uLower).remove(),
+        fbDb.ref("users/" + uLower + "/friends").remove()
+      ]);
+    }).then(function () {
       return fbUser.delete();
     }).then(function () {
       alert("Account eliminato con successo.");
