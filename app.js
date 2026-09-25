@@ -202,7 +202,8 @@
     showChatTradeBuilder: false,
     pendingChatMedia: null,
     chatMediaSending: false,
-    installAvailable: false
+    installAvailable: false,
+    isOffline: (typeof navigator !== "undefined" && "onLine" in navigator) ? !navigator.onLine : false
   };
 
   function setState(changes) { Object.assign(state, changes); }
@@ -455,6 +456,7 @@
   }
   function handleLogout() {
     detachChat();
+    detachTradesLiveWatch();
     fbAuth.signOut().then(function () {
       setHash("");
       setState({
@@ -573,7 +575,7 @@
   function resolveProfile(fbUser) {
     dbGet("profiles/" + fbUser.uid).then(function (profile) {
       var uname = profile && profile.username;
-      if (uname) { setState({ currentUser: uname }); loadInventory(); loadCommunity(); loadFriends(); loadTrades(); loadGroups(); restoreFromHash(); }
+      if (uname) { setState({ currentUser: uname }); loadInventory(); loadCommunity(); loadFriends(); loadTrades(); loadGroups(); attachTradesLiveWatch(); restoreFromHash(); }
       else { setState({ needUsername: true, usernameInput: "" }); }
       render();
     }).catch(function (err) {
@@ -603,6 +605,7 @@
         loadFriends();
         loadTrades();
         loadGroups();
+        attachTradesLiveWatch();
         render();
       });
     }).catch(function (err) { setState({ authError: "Errore: " + err.message }); render(); });
@@ -655,13 +658,23 @@
     return f ? f.status : null;
   }
 
-  function openUser(username) { setState({ selectedUser: username, otherUserInventory: [], otherUserSearch: "", tab: "community" }); getInventory(username.toLowerCase()).then(function (inv) { setState({ otherUserInventory: inv }); render(); }); render(); setHash("community/" + encodeURIComponent(username)); }
+  function openUser(username) {
+    /* se si arriva qui da una chat aperta (es. tap sull'icona profilo o sul nome
+       del mittente), stacca il listener della chat: altrimenti resterebbe attivo
+       in background anche dopo essere passati alla tab Community */
+    if (state.tab === "chat") { detachChat(); clearPendingChatMedia(); }
+    setState({ selectedUser: username, otherUserInventory: [], otherUserSearch: "", tab: "community", chatTarget: null });
+    getInventory(username.toLowerCase()).then(function (inv) { setState({ otherUserInventory: inv }); render(); });
+    render();
+    setHash("community/" + encodeURIComponent(username));
+  }
   function backToCommunity() { setState({ selectedUser: null, otherUserInventory: [], otherUserSearch: "" }); render(); setHash("community"); }
   function openFriend(username) { openUser(username); setState({ tab: "community" }); render(); }
 
   /* ============ chat (privata e di gruppo) ============ */
   var chatRef = null; /* riferimento Firebase attivo, per poterlo staccare (off) quando si cambia chat */
   var MAX_CHAT_MEDIA_DIM = 640;
+  var MAX_CHAT_MESSAGE_LEN = 500; /* limite caratteri per messaggio di testo, riflesso anche nelle regole del DB */
   /* id univoco e stabile per la coppia di utenti, indipendente da chi apre la chat per primo */
   function chatIdFor(u1, u2) {
     return [String(u1 || "").toLowerCase(), String(u2 || "").toLowerCase()].sort().join("__");
@@ -726,6 +739,10 @@
     var text = (state.chatInput || "").trim();
     var path = chatMessagesPath();
     if (!text || !path) return;
+    if (text.length > MAX_CHAT_MESSAGE_LEN) {
+      setMessage("Messaggio troppo lungo (max " + MAX_CHAT_MESSAGE_LEN + " caratteri).", "error");
+      return;
+    }
     var msgId = genId();
     var msg = { id: msgId, from: state.currentUser, type: "text", text: text, created: Date.now() };
     setState({ chatInput: "" });
@@ -846,15 +863,23 @@
     return ids.map(function (id) { var it = getItemById(id, arr); return it ? it.name : "?"; });
   }
   /* verifica che tutti gli id selezionati corrispondano ancora a oggetti esistenti e disponibili
-     (un oggetto puo' essere stato reso non disponibile o eliminato tra la selezione e l'invio) */
+     (un oggetto puo' essere stato reso non disponibile o eliminato tra la selezione e l'invio).
+     Usata per gli oggetti che si VOGLIONO ricevere: quelli devono essere disponibili. */
   function idsStillAvailable(ids, arr) {
     return ids.every(function (id) { var it = getItemById(id, arr); return it && isAvailable(it); });
+  }
+  /* verifica solo che gli id esistano ancora (non richiede che siano "disponibili").
+     Usata per gli oggetti OFFERTI: il proprietario puo' proporre in scambio anche un
+     oggetto che ha segnato come "non disponibile" (es. lo tiene nascosto dalla community
+     ma vuole comunque offrirlo a un amico specifico). */
+  function idsStillExist(ids, arr) {
+    return ids.every(function (id) { return !!getItemById(id, arr); });
   }
 
   function submitTrade() {
     if (!state.selectedUser) return;
     if (!state.wantIds.length || !state.offerIds.length) { setMessage("Seleziona cosa vuoi e cosa offri.", "error"); return; }
-    if (!idsStillAvailable(state.wantIds, state.otherUserInventory) || !idsStillAvailable(state.offerIds, state.inventory)) {
+    if (!idsStillAvailable(state.wantIds, state.otherUserInventory) || !idsStillExist(state.offerIds, state.inventory)) {
       setMessage("Alcuni oggetti selezionati non sono più disponibili. Aggiorna la selezione.", "error");
       return;
     }
@@ -892,7 +917,7 @@
   function submitChatTrade() {
     if (!state.chatTarget || state.chatTarget.type !== "friend") return;
     if (!state.wantIds.length || !state.offerIds.length) { setMessage("Seleziona cosa vuoi e cosa offri.", "error"); return; }
-    if (!idsStillAvailable(state.wantIds, state.chatOtherInventory) || !idsStillAvailable(state.offerIds, state.inventory)) {
+    if (!idsStillAvailable(state.wantIds, state.chatOtherInventory) || !idsStillExist(state.offerIds, state.inventory)) {
       setMessage("Alcuni oggetti selezionati non sono più disponibili. Aggiorna la selezione.", "error");
       return;
     }
@@ -999,6 +1024,50 @@
     fbDb.ref("trades/" + tradeId).remove().then(function () { setMessage("Scambio annullato.", "success"); loadTrades(); }).catch(function (err) { setMessage("Errore: " + err.message, "error"); });
   }
 
+  /* ============ notifica in tempo reale per scambi accettati/rifiutati ============
+     Resta in ascolto sul nodo "trades" per tutta la sessione (non solo quando si apre
+     la tab Scambi): se uno scambio che coinvolge l'utente passa da "in attesa" a
+     "accettato"/"rifiutato" - tipicamente perché l'altra persona ha risposto da un altro
+     dispositivo/scheda - avvisa con un banner e ricarica automaticamente inventario e
+     storico, cosi' non serve ricaricare manualmente la pagina per vedere l'esito. */
+  var tradesLiveRef = null;
+  var knownTradeStatus = {};
+  function tradeStatusOf(t) { return t.accepted ? "accepted" : t.declined ? "declined" : "pending"; }
+  function attachTradesLiveWatch() {
+    if (tradesLiveRef) return;
+    tradesLiveRef = fbDb.ref("trades");
+    tradesLiveRef.on("value", function (snap) {
+      var mine = toArray(snap.val()).filter(function (t) {
+        var fromU = t.fromUser || t.from || "";
+        var toU = t.toUser || t.to || "";
+        return sameUser(fromU, state.currentUser) || sameUser(toU, state.currentUser);
+      });
+      var justResolved = [];
+      mine.forEach(function (t) {
+        var prev = knownTradeStatus[t.id];
+        var cur = tradeStatusOf(t);
+        if (prev === "pending" && cur !== "pending" && !tradeInFlight[t.id]) justResolved.push(t);
+        knownTradeStatus[t.id] = cur;
+      });
+      if (justResolved.length) {
+        loadTrades();
+        loadInventory();
+        var accepted = justResolved.filter(function (t) { return t.accepted; }).length;
+        var declined = justResolved.length - accepted;
+        var parts = [];
+        if (accepted) parts.push(accepted === 1 ? "Uno scambio è stato accettato" : accepted + " scambi sono stati accettati");
+        if (declined) parts.push(declined === 1 ? "uno scambio è stato rifiutato" : declined + " scambi sono stati rifiutati");
+        setMessage(parts.join(", ") + " — inventario aggiornato.", accepted ? "success" : "error");
+      }
+    }, function (err) {
+      setMessage(dbErrorMessage(err, "Errore aggiornamento scambi: " + err.message), "error");
+    });
+  }
+  function detachTradesLiveWatch() {
+    if (tradesLiveRef) { tradesLiveRef.off("value"); tradesLiveRef = null; }
+    knownTradeStatus = {};
+  }
+
   /* ============ lightbox ============ */
   function viewPhotos(itemId, source) {
     var sourceArr = source === "other" ? state.otherUserInventory : state.inventory;
@@ -1083,6 +1152,29 @@
       (lb.photos.length > 1 ? '<button type="button" data-action="lightbox-next" class="lightbox-btn next">' + icon("chevron-left", "icon-flip-h") + '</button>' : '') +
       '<button type="button" data-action="close-lightbox" class="lightbox-close">' + icon("x") + '</button>' +
       '<div class="lightbox-counter">' + (lb.index + 1) + '/' + lb.photos.length + '</div></div>';
+  }
+
+  /* card compatta (con miniatura) usata nelle liste di selezione degli scambi
+     ("Voglio" / "Offro"), cosi' si riconoscono gli oggetti anche solo dalla foto.
+     showAvailability: se true e l'oggetto e' segnato "non disponibile" mostra un'etichetta
+     (usato per la propria lista "Offro", dove si puo' scegliere anche un oggetto non disponibile) */
+  function renderTradeItemCard(item, selected, action, showAvailability) {
+    var photos = itemPhotos(item);
+    var thumbHtml;
+    if (photos.length) {
+      var fp = photos[0];
+      thumbHtml = isVideo(fp)
+        ? '<video src="' + escapeHtml(photoUrl(fp)) + '" class="trade-item-thumb-media" muted playsinline preload="metadata"></video>'
+        : '<img src="' + escapeHtml(photoUrl(fp)) + '" alt="" class="trade-item-thumb-media"/>';
+    } else {
+      thumbHtml = icon("package");
+    }
+    var unavailable = showAvailability && !isAvailable(item);
+    return '<div class="trade-item ' + (selected ? "selected" : "") + (unavailable ? " trade-item-unavail" : "") + '" data-action="' + action + '" data-id="' + escapeHtml(item.id) + '">' +
+      '<div class="trade-item-thumb' + (photos.length ? "" : " empty") + '">' + thumbHtml + '</div>' +
+      '<span class="trade-item-name">' + escapeHtml(item.name) + (unavailable ? ' <span class="trade-item-badge">non disponibile</span>' : '') + '</span>' +
+      (selected ? icon("check") : '') +
+      '</div>';
   }
 
   function renderInventoryItem(item, isOwn) {
@@ -1207,14 +1299,14 @@
       html += '<div class="trade-builder"><div class="trade-section"><h3>Voglio</h3><div class="items-list">' +
         filteredOther.map(function (item) {
           var sel = state.wantIds.indexOf(item.id) !== -1;
-          return '<div class="trade-item ' + (sel ? "selected" : "") + '" data-action="toggle-want" data-id="' + escapeHtml(item.id) + '">' + escapeHtml(item.name) + (sel ? ' ' + icon("check") : "") + '</div>';
+          return renderTradeItemCard(item, sel, "toggle-want", false);
         }).join("") +
         '</div></div>' +
         '<div class="trade-divider">' + icon("swap") + '</div>' +
-        '<div class="trade-section"><h3>Offro</h3><div class="items-list">' +
-        state.inventory.filter(isAvailable).map(function (item) {
+        '<div class="trade-section"><h3>Offro</h3><p class="trade-section-hint">Puoi offrire anche oggetti segnati come "non disponibili": restano nascosti alla community ma puoi comunque proporli in questo scambio.</p><div class="items-list">' +
+        state.inventory.map(function (item) {
           var sel = state.offerIds.indexOf(item.id) !== -1;
-          return '<div class="trade-item ' + (sel ? "selected" : "") + '" data-action="toggle-offer" data-id="' + escapeHtml(item.id) + '">' + escapeHtml(item.name) + (sel ? ' ' + icon("check") : "") + '</div>';
+          return renderTradeItemCard(item, sel, "toggle-offer", true);
         }).join("") +
         '</div></div>' +
         '<div class="trade-actions"><button type="button" data-action="cancel-trade-builder" class="btn-ghost">Annulla</button><button type="button" data-action="submit-trade" class="btn-primary">Invia Proposta</button></div></div>';
@@ -1300,9 +1392,14 @@
     var target = state.chatTarget;
     var isGroup = target.type === "group";
     var html = '<div class="chat-thread">';
+    /* nelle chat 1-a-1 (non di gruppo) l'avatar/nome in cima porta sempre
+       all'inventario dell'altra persona, come l'icona profilo propria in header */
+    var profileAttrs = !isGroup ? ' data-action="open-user" data-username="' + escapeHtml(target.id) + '"' : '';
     html += '<div class="chat-thread-header"><button type="button" data-action="close-chat" class="btn-icon-left mobile-only">' + icon("chevron-left") + '</button>' +
+      '<div class="chat-thread-profile' + (!isGroup ? " clickable" : "") + '"' + profileAttrs + (!isGroup ? ' title="Vai all\'inventario di ' + escapeHtml(target.name) + '"' : '') + '>' +
       '<div class="chat-avatar ' + (isGroup ? "group" : "") + '">' + icon(isGroup ? "users" : "user") + '</div>' +
-      '<div class="chat-thread-title"><h2>' + escapeHtml(target.name) + '</h2>' + (isGroup ? '<div class="chat-sub">' + toArray(target.members).length + ' membri</div>' : '') + '</div>' +
+      '<div class="chat-thread-title"><h2>' + escapeHtml(target.name) + '</h2>' + (isGroup ? '<div class="chat-sub">' + toArray(target.members).length + ' membri</div>' : '<div class="chat-sub">Vedi inventario</div>') + '</div>' +
+      '</div>' +
       '<div class="chat-thread-actions">' +
       (!isGroup ? '<button type="button" data-action="open-chat-trade" class="btn-ghost btn-sm" title="Proponi scambio">' + icon("swap") + ' Scambio</button>' : '<button type="button" data-action="leave-group" data-id="' + escapeHtml(target.id) + '" class="btn-ghost btn-sm" title="Esci dal gruppo">' + icon("x") + ' Esci</button>') +
       '</div></div>';
@@ -1314,7 +1411,7 @@
         var own = sameUser(m.from, state.currentUser);
         var showSender = isGroup && !own;
         return '<div class="chat-bubble-row ' + (own ? "own" : "") + '"><div class="chat-bubble ' + ((m.type === "image" || m.type === "video") ? "chat-bubble-has-media" : "") + '">' +
-          (showSender ? '<div class="chat-bubble-sender">' + escapeHtml(m.from) + '</div>' : '') +
+          (showSender ? '<div class="chat-bubble-sender clickable" data-action="open-user" data-username="' + escapeHtml(m.from) + '" title="Vai all\'inventario di ' + escapeHtml(m.from) + '">' + escapeHtml(m.from) + '</div>' : '') +
           renderChatMessageContent(m) +
           '<div class="chat-bubble-time">' + formatChatTime(m.created) + '</div>' +
           '</div></div>';
@@ -1337,9 +1434,12 @@
     } else if (state.chatMediaSending) {
       html += '<div class="chat-pending-media"><span class="chat-pending-label">' + icon("loader", "spin-tiny") + ' Invio in corso...</span></div>';
     }
+    var chatLen = (state.chatInput || "").length;
     html += '<form id="chat-form" class="chat-form">' +
       '<label class="chat-attach-btn" title="Invia foto o video"><input type="file" id="chat-media-input" accept="image/*,video/*" style="display:none"/>' + icon("paperclip") + '</label>' +
-      '<input id="chat-input" type="text" autocomplete="off" placeholder="Scrivi un messaggio..." value="' + escapeHtml(state.chatInput) + '"/><button type="submit" class="btn-icon" title="Invia">' + icon("send") + '</button></form>';
+      '<input id="chat-input" type="text" autocomplete="off" maxlength="' + MAX_CHAT_MESSAGE_LEN + '" placeholder="Scrivi un messaggio..." value="' + escapeHtml(state.chatInput) + '"/>' +
+      (chatLen > MAX_CHAT_MESSAGE_LEN - 80 ? '<span class="chat-char-count' + (chatLen >= MAX_CHAT_MESSAGE_LEN ? " limit" : "") + '">' + chatLen + '/' + MAX_CHAT_MESSAGE_LEN + '</span>' : '') +
+      '<button type="submit" class="btn-icon" title="Invia">' + icon("send") + '</button></form>';
     html += '</div>';
     return html;
   }
@@ -1385,14 +1485,14 @@
       '<div class="trade-builder trade-builder-inline"><div class="trade-section"><h3>Voglio</h3><div class="items-list">' +
       (otherItems.length ? otherItems.map(function (item) {
         var sel = state.wantIds.indexOf(item.id) !== -1;
-        return '<div class="trade-item ' + (sel ? "selected" : "") + '" data-action="toggle-want" data-id="' + escapeHtml(item.id) + '">' + escapeHtml(item.name) + (sel ? ' ' + icon("check") : "") + '</div>';
+        return renderTradeItemCard(item, sel, "toggle-want", false);
       }).join("") : '<p class="chat-sub">Nessun oggetto disponibile.</p>') +
       '</div></div>' +
       '<div class="trade-divider">' + icon("swap") + '</div>' +
-      '<div class="trade-section"><h3>Offro</h3><div class="items-list">' +
-      state.inventory.filter(isAvailable).map(function (item) {
+      '<div class="trade-section"><h3>Offro</h3><p class="trade-section-hint">Puoi offrire anche oggetti segnati come "non disponibili".</p><div class="items-list">' +
+      state.inventory.map(function (item) {
         var sel = state.offerIds.indexOf(item.id) !== -1;
-        return '<div class="trade-item ' + (sel ? "selected" : "") + '" data-action="toggle-offer" data-id="' + escapeHtml(item.id) + '">' + escapeHtml(item.name) + (sel ? ' ' + icon("check") : "") + '</div>';
+        return renderTradeItemCard(item, sel, "toggle-offer", true);
       }).join("") +
       '</div></div></div>' +
       '</div>' +
@@ -1521,6 +1621,13 @@
      da qualunque punto dell'app ci si trovi (inventario di un altro utente, chat, ecc.) */
   function goToOwnInventory() { switchTab("inventory"); }
 
+  /* banner fisso mostrato quando il dispositivo risulta offline: l'app (guscio) resta
+     utilizzabile grazie al service worker, ma i dati (Firebase) richiedono connessione */
+  function renderOfflineBanner() {
+    if (!state.isOffline) return "";
+    return '<div class="offline-banner">' + icon("alert-circle") + '<span>Sei offline: l\'app resta aperta, ma i dati non si aggiornano finché la connessione non torna.</span></div>';
+  }
+
   function render() {
     if (state.booting) {
       document.getElementById("app").innerHTML = '<div class="auth-wrap"><div class="auth-box" style="text-align:center;">' + icon("loader", "spin-sm") + "</div></div>";
@@ -1530,7 +1637,7 @@
     var active = document.activeElement;
     var keepFocusId = (active && FOCUS_PRESERVE_IDS.indexOf(active.id) !== -1) ? active.id : null;
     var selStart = keepFocusId ? active.selectionStart : null, selEnd = keepFocusId ? active.selectionEnd : null;
-    document.getElementById("app").innerHTML = state.currentUser ? renderApp() : renderAuth();
+    document.getElementById("app").innerHTML = renderOfflineBanner() + (state.currentUser ? renderApp() : renderAuth());
     if (keepFocusId) {
       var el = document.getElementById(keepFocusId);
       if (el) { el.focus(); try { el.setSelectionRange(selStart, selEnd); } catch (err) {} }
@@ -1662,6 +1769,10 @@
     render();
   }
 
+  /* ============ stato connessione (banner offline) ============ */
+  window.addEventListener("online", function () { setState({ isOffline: false }); render(); });
+  window.addEventListener("offline", function () { setState({ isOffline: true }); render(); });
+
   /* ============ PWA: installazione e service worker ============ */
   var deferredInstallPrompt = null;
   window.addEventListener("beforeinstallprompt", function (e) {
@@ -1698,6 +1809,7 @@
       if (!fbUser) {
         /* user signed out: clear everything so the auth screen shows */
         detachChat();
+        detachTradesLiveWatch();
         setState({
           currentUser: "",
           needUsername: false,

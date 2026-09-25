@@ -3,7 +3,7 @@
    anche offline o con connessione instabile. I dati (inventari, chat, scambi)
    restano gestiti da Firebase e richiedono comunque una connessione. */
 
-var CACHE_VERSION = "baratto-v1";
+var CACHE_VERSION = "baratto-v2";
 var APP_SHELL = [
   "./",
   "./index.html",
