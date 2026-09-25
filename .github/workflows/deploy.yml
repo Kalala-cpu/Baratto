@@ -25,7 +25,14 @@ jobs:
       - name: Prepara i file del sito
         run: |
           mkdir _site
-          cp index.html style.css app.js _site/
+          cp index.html style.css app.js manifest.json service-worker.js _site/
+          for f in icon-192.png icon-512.png icon-maskable-512.png apple-touch-icon.png; do
+            if [ -f "$f" ]; then
+              cp "$f" _site/
+            else
+              echo "Attenzione: $f non trovato nel repository, non verrà pubblicato (favicon/installazione PWA potrebbero non funzionare)."
+            fi
+          done
 
       - name: Inserisci la Firebase API key
         env:
