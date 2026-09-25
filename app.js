@@ -809,8 +809,9 @@
     }
     var trade = {
       id: genId(),
-      from: state.currentUser,
-      to: state.selectedUser,
+      /* field names must match the DB rules: fromUser / toUser (come friendRequests) */
+      fromUser: state.currentUser,
+      toUser: state.selectedUser,
       wantIds: state.wantIds,
       offerIds: state.offerIds,
       wantNames: namesForIds(state.wantIds, state.otherUserInventory),
@@ -848,8 +849,9 @@
     var offerNames = namesForIds(state.offerIds, state.inventory);
     var trade = {
       id: genId(),
-      from: state.currentUser,
-      to: state.chatTarget.id,
+      /* field names must match the DB rules: fromUser / toUser (come friendRequests) */
+      fromUser: state.currentUser,
+      toUser: state.chatTarget.id,
       wantIds: state.wantIds,
       offerIds: state.offerIds,
       wantNames: wantNames,
@@ -1152,8 +1154,8 @@
     if (type === "trade") {
       var trade = (state.allTrades || []).filter(function (t) { return t.id === m.tradeId; })[0];
       var status = trade ? (trade.accepted ? "accepted" : trade.declined ? "declined" : "pending") : "pending";
-      var isRecipient = trade && sameUser(trade.to, state.currentUser);
-      var isSender = trade && sameUser(trade.from, state.currentUser);
+      var isRecipient = trade && sameUser(trade.toUser || trade.to, state.currentUser);
+      var isSender = trade && sameUser(trade.fromUser || trade.from, state.currentUser);
       var want = (m.wantNames || (trade && trade.wantNames) || []).map(escapeHtml).join(", ") || "—";
       var offer = (m.offerNames || (trade && trade.offerNames) || []).map(escapeHtml).join(", ") || "—";
       var html = '<div class="chat-trade-card ' + status + '">' +
