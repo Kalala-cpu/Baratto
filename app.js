@@ -892,6 +892,10 @@
     return ids.every(function (id) { return !!getItemById(id, arr); });
   }
 
+  /* proporre uno scambio dall'inventario di un utente (tab Community, non dalla chat):
+     la proposta finisce comunque come messaggio nella chat con quella persona, cosi' la
+     notifica (e le azioni Accetta/Rifiuta, con stato aggiornato in tempo reale) si vedono
+     sempre in chat, indipendentemente da dove e' stato avviato lo scambio */
   function submitTrade() {
     if (!state.selectedUser) return;
     if (!state.wantIds.length || !state.offerIds.length) { setMessage("Seleziona cosa vuoi e cosa offri.", "error"); return; }
@@ -899,6 +903,8 @@
       setMessage("Alcuni oggetti selezionati non sono più disponibili. Aggiorna la selezione.", "error");
       return;
     }
+    var wantNames = namesForIds(state.wantIds, state.otherUserInventory);
+    var offerNames = namesForIds(state.offerIds, state.inventory);
     var trade = {
       id: genId(),
       /* field names must match the DB rules: fromUser / toUser (come friendRequests) */
@@ -906,16 +912,20 @@
       toUser: state.selectedUser,
       wantIds: state.wantIds,
       offerIds: state.offerIds,
-      wantNames: namesForIds(state.wantIds, state.otherUserInventory),
-      offerNames: namesForIds(state.offerIds, state.inventory),
+      wantNames: wantNames,
+      offerNames: offerNames,
       created: Date.now(),
       accepted: false,
       declined: false
     };
+    var chatPath = "chats/" + chatIdFor(state.currentUser, state.selectedUser) + "/messages";
     dbSet("trades/" + trade.id, trade).then(function () {
       setState({ showTradeBuilder: false, wantIds: [], offerIds: [] });
       setMessage("Scambio proposto!", "success");
       loadTrades();
+      var msgId = genId();
+      var msg = { id: msgId, from: state.currentUser, type: "trade", tradeId: trade.id, wantNames: wantNames, offerNames: offerNames, created: Date.now() };
+      return dbSet(chatPath + "/" + msgId, msg);
     }).catch(function (err) { setMessage("Errore: " + err.message, "error"); });
   }
 
