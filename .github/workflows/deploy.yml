@@ -34,15 +34,21 @@ jobs:
             fi
           done
 
-      - name: Inserisci la Firebase API key
+      - name: Inserisci la Firebase API key (offuscata in Base64)
         env:
           FIREBASE_API_KEY: ${{ secrets.FIREBASE_API_KEY }}
         run: |
+          # NOTA: questo offusca solo il sorgente pubblicato (niente chiave in chiaro
+          # leggibile a colpo d'occhio su GitHub/view-source). Non è una vera protezione:
+          # la chiave viaggia comunque in chiaro nelle richieste di rete a Firebase.
+          # La protezione reale va fatta lato Google Cloud Console (restrizione per
+          # referrer HTTP) e/o con Firebase App Check.
           if [ -z "$FIREBASE_API_KEY" ]; then
             echo "Il secret FIREBASE_API_KEY è vuoto o mancante"; exit 1
           fi
-          sed -i "s|__FIREBASE_API_KEY__|$FIREBASE_API_KEY|g" _site/app.js
-          if grep -q "__FIREBASE_API_KEY__" _site/app.js; then
+          FIREBASE_API_KEY_B64=$(printf '%s' "$FIREBASE_API_KEY" | base64 -w0)
+          sed -i "s|__FIREBASE_API_KEY_B64__|$FIREBASE_API_KEY_B64|g" _site/app.js
+          if grep -q "__FIREBASE_API_KEY_B64__" _site/app.js; then
             echo "Segnaposto non sostituito in app.js"; exit 1
           fi
 
