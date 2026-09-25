@@ -1,4 +1,98 @@
 /* =======================================================================
+   COMMUNITY — GRIGLIA UTENTI
+   ======================================================================= */
+.community-users-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.community-user-card {
+  background: var(--paper);
+  border: 1.5px solid var(--line);
+  border-radius: var(--radius);
+  padding: 1.25rem 1rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s, transform 0.12s;
+  text-align: center;
+  box-shadow: var(--shadow);
+}
+.community-user-card:hover {
+  border-color: var(--brass);
+  box-shadow: 0 4px 16px -4px rgba(181,121,47,0.18);
+  transform: translateY(-2px);
+}
+
+.community-user-avatar {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: var(--brass-light);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--brass);
+  flex-shrink: 0;
+  overflow: hidden;
+}
+.community-user-avatar .icon {
+  width: 2rem;
+  height: 2rem;
+}
+.community-user-avatar--photo {
+  background: var(--line);
+}
+.community-user-thumb-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
+  display: block;
+}
+.community-user-thumb-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
+  display: block;
+}
+
+.community-user-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  align-items: center;
+}
+.community-user-name {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--ink);
+  word-break: break-word;
+}
+.community-item-count {
+  font-size: 0.78rem;
+  color: var(--brass);
+  font-weight: 500;
+}
+.community-item-count.zero {
+  color: var(--ink-soft);
+  font-weight: 400;
+}
+
+@media (max-width: 480px) {
+  .community-users-grid {
+    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+    gap: 0.75rem;
+  }
+  .community-user-avatar { width: 52px; height: 52px; }
+}
+
+/* =======================================================================
    Baratto — foglio di stile
    Palette calda "carta e ottone": crema, inchiostro, ottone/ambra.
    Titoli in Fraunces (serif con carattere), testo in Public Sans.
