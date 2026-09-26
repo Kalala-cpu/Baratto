@@ -1355,6 +1355,9 @@
     var photos = state.newItemPhotos;
     return '' +
       '<div id="add-item-overlay" class="modal-overlay" data-action="close-add-item"></div>' +
+      '<div class="modal">' +
+      '<div class="modal-header"><h2>Aggiungi Oggetto</h2><button type="button" data-action="close-add-item" class="btn-close">' + icon("x") + '</button></div>' +
+      '<form id="add-item-form" class="modal-body">' +
       '<div class="field"><label>Nome</label><input id="new-item-name" type="text" placeholder="Es: Bicicletta blu" value="' + escapeHtml(state.newItemName) + '"/></div>' +
       '<div class="photos-section"><label>Foto (' + photos.length + '/' + MAX_ITEM_PHOTOS + ')</label>' +
       '<div class="photos-grid">' + photos.map(function (p, idx) {
