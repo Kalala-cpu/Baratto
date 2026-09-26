@@ -735,6 +735,11 @@ input { font-family: inherit; }
 .modal-body { padding: 1.1rem 1.25rem; overflow-y: auto; flex: 1; }
 .modal-footer { padding: 1rem 1.25rem 1.25rem; flex-shrink: 0; }
 
+.tos-section { margin-bottom: 1rem; }
+.tos-section:last-child { margin-bottom: 0; }
+.tos-section h3 { font-family: "Fraunces", Georgia, serif; font-size: 0.95rem; margin-bottom: 0.3rem; color: var(--ink); }
+.tos-section p { font-size: 0.86rem; line-height: 1.5; color: var(--ink-soft); }
+
 .photos-section label:not(.photo-upload) {
   display: block;
   font-size: 0.78rem;
@@ -962,6 +967,8 @@ input { font-family: inherit; }
   flex-shrink: 0;
 }
 .who .name { font-weight: 700; font-size: 0.92rem; }
+.who.clickable { cursor: pointer; border-radius: var(--radius-sm); padding: 0.2rem 0.3rem; margin: -0.2rem -0.3rem; transition: background 0.15s; }
+.who.clickable:hover { background: var(--cream); }
 .friend-actions { display: flex; align-items: center; gap: 0.4rem; }
 .friend-accept { color: var(--green); border-color: var(--green-bg); background: var(--green-bg); }
 .friend-accept:hover { background: #dcefd8; }

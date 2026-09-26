@@ -219,6 +219,7 @@
     historyUserFilter: "",
     historyDateFrom: "",
     historyDateTo: "",
+    showTosModal: false,
     installAvailable: false,
     isOffline: (typeof navigator !== "undefined" && "onLine" in navigator) ? !navigator.onLine : false
   };
@@ -1363,6 +1364,31 @@
     tradesLiveFirstSnapshot = true;
   }
 
+  /* ============ timer di scadenza scambi ============
+     isTradeExpired confronta Date.now() con expiresAt, ma viene ricalcolato solo quando
+     render() gira per un altro motivo (un click, un nuovo messaggio, il listener live
+     degli scambi...): se nel frattempo nessuno tocca nulla, una proposta che scade resta
+     mostrata "In attesa" finche' qualcuno non interagisce con la pagina. Ogni tot secondi
+     controlliamo se l'insieme delle proposte pendenti appena scadute e' cambiato rispetto
+     all'ultimo controllo, e solo in quel caso chiamiamo render() (ora sicuro anche a
+     intervalli regolari, perche' render() preserva scroll/focus): cosi' lo stato "Scaduto"
+     compare da solo, senza ridisegnare in continuazione quando non serve. */
+  var TRADE_EXPIRY_CHECK_MS = 30000;
+  var lastExpiredTradeIds = "";
+  function checkTradeExpiries() {
+    if (!state.currentUser) return;
+    var pending = (state.allTrades || []).filter(function (t) {
+      return t && t.expiresAt && !t.accepted && !t.declined && !t.cancelled;
+    });
+    if (!pending.length) return;
+    var expiredIds = pending.filter(isTradeExpired).map(function (t) { return t.id; }).sort().join(",");
+    if (expiredIds !== lastExpiredTradeIds) {
+      lastExpiredTradeIds = expiredIds;
+      render();
+    }
+  }
+  setInterval(checkTradeExpiries, TRADE_EXPIRY_CHECK_MS);
+
   /* ============ lightbox ============ */
   function viewPhotos(itemId, source) {
     var sourceArr = source === "other" ? state.otherUserInventory : state.inventory;
@@ -1750,7 +1776,7 @@
     }
     if (incoming.length) { html += '<div class="section-title">Richieste in sospeso</div>' + incoming.map(function (r) { return '<div class="friend-card"><div class="who">' + userAvatarHtml(r.username || "") + '<div><div class="name">' + escapeHtml(r.username || "") + '</div></div></div><div class="friend-actions"><button type="button" data-action="accept-friend" data-id="' + escapeHtml(r.id) + '" class="btn-ghost friend-accept">' + icon("user-check") + '</button><button type="button" data-action="decline-friend" data-id="' + escapeHtml(r.id) + '" class="btn-ghost">' + icon("x") + '</button></div></div>'; }).join(""); }
     if (outgoing.length) { html += '<div class="section-title">Richieste inviate</div>' + outgoing.map(function (r) { return '<div class="friend-card"><div class="who">' + userAvatarHtml(r.username || "") + '<div><div class="name">' + escapeHtml(r.username || "") + '</div></div></div><div class="friend-actions"><span class="pill-muted">In attesa</span><button type="button" data-action="cancel-friend-request" data-id="' + escapeHtml(r.id) + '" class="btn-ghost">' + icon("x") + '</button></div></div>'; }).join(""); }
-    if (accepted.length) { html += '<div class="section-title">Amici</div>' + accepted.map(function (f) { return '<div class="friend-card"><div class="who">' + userAvatarHtml(f.username || "") + '<div><div class="name">' + escapeHtml(f.username || "") + '</div></div></div><div class="friend-actions"><button type="button" data-action="open-chat" data-username="' + escapeHtml(f.username || "") + '" class="btn-ghost" title="Chat">' + icon("message") + '</button><button type="button" data-action="open-friend" data-username="' + escapeHtml(f.username || "") + '" class="btn-ghost" title="Inventario">' + icon("inbox") + '</button><button type="button" data-action="remove-friend" data-id="' + escapeHtml(f.id) + '" data-username="' + escapeHtml(f.username || "") + '" class="btn-ghost">' + icon("x") + '</button></div></div>'; }).join(""); }
+    if (accepted.length) { html += '<div class="section-title">Amici</div>' + accepted.map(function (f) { return '<div class="friend-card"><div class="who clickable" data-action="open-chat" data-username="' + escapeHtml(f.username || "") + '" title="Apri chat con ' + escapeHtml(f.username || "") + '">' + userAvatarHtml(f.username || "") + '<div><div class="name">' + escapeHtml(f.username || "") + '</div></div></div><div class="friend-actions"><button type="button" data-action="open-chat" data-username="' + escapeHtml(f.username || "") + '" class="btn-ghost" title="Chat">' + icon("message") + '</button><button type="button" data-action="open-friend" data-username="' + escapeHtml(f.username || "") + '" class="btn-ghost" title="Inventario">' + icon("inbox") + '</button><button type="button" data-action="remove-friend" data-id="' + escapeHtml(f.id) + '" data-username="' + escapeHtml(f.username || "") + '" class="btn-ghost">' + icon("x") + '</button></div></div>'; }).join(""); }
     if (!incoming.length && !outgoing.length && !accepted.length) { html += '<div class="empty-state"><p>Nessun amico ancora. Inizia ad aggiungerne!</p></div>'; }
     return html;
   }
@@ -2029,7 +2055,32 @@
       var idPlaceholder = state.authMode === "login" ? "tua@email.com o nome utente" : "tua@email.com";
       formHtml = '<form id="auth-form"><div class="field"><label>' + idLabel + '</label><div class="field-icon-wrap"><input id="auth-email" type="text" placeholder="' + idPlaceholder + '" value="' + escapeHtml(state.authEmail) + '"/><span class="icon">' + icon("mail") + '</span></div></div><div class="field"><label>Password</label><div class="field-icon-wrap"><input id="auth-password" type="password" autocomplete="' + (state.authMode === "login" ? "current-password" : "new-password") + '" placeholder="Almeno 6 caratteri"/><span class="icon">' + icon("lock") + '</span></div></div>' + (state.authError ? '<div class="banner error">' + icon("alert-circle") + '<span>' + escapeHtml(state.authError) + '</span></div>' : '') + '<button type="submit" class="btn-primary block">' + (state.authMode === "login" ? "Accedi" : "Registrati") + '</button></form><div class="auth-divider">oppure</div><button type="button" data-action="google-login" class="btn-google"><svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="currentColor"/><path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="currentColor"/><path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="currentColor"/><path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="currentColor"/></svg>Google</button>';
     }
-    return '<div class="auth-wrap"><div class="auth-box"><div class="auth-header"><h1 class="display">Baratto</h1><div class="ornament"><div class="line"></div><div class="dot"></div><div class="line"></div></div><p>Scambia oggetti con la comunità</p></div><div class="auth-panel">' + segHtml + formHtml + '</div><div class="auth-footnote">Creando un account accetti i nostri <a href="#" style="color:var(--brass);">Termini di Servizio</a></div></div></div>';
+    return '<div class="auth-wrap"><div class="auth-box"><div class="auth-header"><h1 class="display">Baratto</h1><div class="ornament"><div class="line"></div><div class="dot"></div><div class="line"></div></div><p>Scambia oggetti con la comunità</p></div><div class="auth-panel">' + segHtml + formHtml + '</div><div class="auth-footnote">Creando un account accetti i nostri <a href="#" data-action="open-tos" style="color:var(--brass);">Termini di Servizio</a></div></div></div>' +
+      (state.showTosModal ? renderTosModal() : '');
+  }
+
+  /* ============ Termini di Servizio ============
+     Prima era un link morto (href="#") nel footer del login/registrazione: qui il testo
+     e' generico ma pensato per QUESTA app (scambio diretto di oggetti tra utenti, senza
+     denaro, con contenuti caricati dagli utenti stessi), non un semplice segnaposto.
+     Non sostituisce una consulenza legale vera: se l'app va online per davvero conviene
+     farlo rivedere da chi se ne intende, ma intanto il link porta a qualcosa di reale
+     invece che a "#". */
+  function renderTosModal() {
+    return '<div id="tos-modal-overlay" class="modal-overlay" data-action="close-tos"></div>' +
+      '<div class="modal">' +
+      '<div class="modal-header"><h2>Termini di Servizio</h2><button type="button" data-action="close-tos" class="btn-close">' + icon("x") + '</button></div>' +
+      '<div class="modal-body">' +
+      '<p class="chat-sub" style="margin-bottom:0.9rem;">Ultimo aggiornamento: ' + new Date().getFullYear() + '. Usando Baratto accetti questi termini.</p>' +
+      '<div class="tos-section"><h3>1. Cos\'è Baratto</h3><p>Baratto è un registro tra utenti per proporre e accettare scambi diretti di oggetti (nessun pagamento in denaro passa attraverso l\'app). L\'app mette in contatto le persone e tiene traccia degli scambi proposti, accettati, rifiutati o annullati; non verifica gli oggetti né garantisce che uno scambio vada a buon fine nella vita reale.</p></div>' +
+      '<div class="tos-section"><h3>2. Account</h3><p>Sei responsabile della sicurezza delle tue credenziali e di tutto ciò che avviene dal tuo account. Puoi eliminare l\'account in qualsiasi momento dalle impostazioni; l\'eliminazione è definitiva e rimuove profilo, inventario e lista amici, mentre scambi e messaggi già condivisi con altri utenti possono restare visibili a loro.</p></div>' +
+      '<div class="tos-section"><h3>3. Contenuti caricati</h3><p>Le foto, i video e i testi che carichi (oggetti, chat, gruppi) restano tuoi, ma pubblicandoli ne autorizzi la visualizzazione agli altri utenti con cui interagisci nell\'app, secondo le stesse funzionalità (community, chat, scambi). Non caricare contenuti che non hai il diritto di condividere, illegali, offensivi o ingannevoli sulla natura reale dell\'oggetto offerto.</p></div>' +
+      '<div class="tos-section"><h3>4. Comportamento tra utenti</h3><p>Gli scambi avvengono sotto la tua responsabilità: verifica sempre di persona (o comunque prima di consegnare un oggetto) che quanto ricevuto corrisponda a quanto concordato. Baratto non è parte dello scambio e non media eventuali controversie tra utenti.</p></div>' +
+      '<div class="tos-section"><h3>5. Limitazione di responsabilità</h3><p>L\'app viene fornita "così com\'è": nei limiti consentiti dalla legge, non si garantisce continuità del servizio né si risponde di eventuali danni derivanti da scambi non andati a buon fine, contenuti caricati da altri utenti o interruzioni del servizio.</p></div>' +
+      '<div class="tos-section"><h3>6. Modifiche</h3><p>Questi termini possono cambiare nel tempo; l\'uso continuato dell\'app dopo un aggiornamento equivale ad accettarli.</p></div>' +
+      '</div>' +
+      '<div class="modal-footer"><button type="button" data-action="close-tos" class="btn-primary block">Ho capito</button></div>' +
+      '</div>';
   }
 
   function renderApp() {
@@ -2180,6 +2231,8 @@
     else if (action === "show-link") { state.authMode = "link"; state.authError = ""; state.linkSentTo = null; render(); }
     else if (action === "show-noemail") { state.authMode = "noEmail"; state.authError = ""; render(); }
     else if (action === "link-again") { state.linkSentTo = null; render(); }
+    else if (action === "open-tos") { e.preventDefault(); state.showTosModal = true; render(); }
+    else if (action === "close-tos") { state.showTosModal = false; render(); }
     else if (action === "google-login") { handleGoogle(); }
     else if (action === "logout") { handleLogout(); }
     else if (action === "open-delete-account-confirm") { openDeleteAccountConfirm(); }
@@ -2412,7 +2465,8 @@
           tradeDuration: "",
           historyUserFilter: "",
           historyDateFrom: "",
-          historyDateTo: ""
+          historyDateTo: "",
+          showTosModal: false
         });
         render();
         return;
