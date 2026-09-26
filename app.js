@@ -360,6 +360,26 @@
     });
   }
 
+  /* scorciatoia: sposta direttamente un oggetto in prima posizione (immagine profilo),
+     senza dover premere piu' volte "Prima". Stessa logica ottimistica + transazione
+     di moveInventoryItem, ma con splice/unshift invece di uno scambio di coppia. */
+  function setAsProfileItem(itemId) {
+    var inv = state.inventory;
+    var idx = findItemIndexById(itemId, inv);
+    if (idx <= 0) return;
+    var item = inv.splice(idx, 1)[0];
+    inv.unshift(item);
+    render();
+    updateInventory(state.currentUser.toLowerCase(), function (serverInv) {
+      var i = findItemIndexById(itemId, serverInv);
+      if (i > 0) { var it = serverInv.splice(i, 1)[0]; serverInv.unshift(it); }
+      return serverInv;
+    }).then(function () { loadInventory(); }).catch(function (err) {
+      setMessage("Errore: " + err.message, "error");
+      loadInventory();
+    });
+  }
+
   /* ============ delete item ============ */
   function deleteItem(id) {
     if (!confirm("Eliminare questo oggetto?")) return;
@@ -1004,7 +1024,19 @@
 
   /* ============ trades ============ */
   function toggleWant(id) { var i = state.wantIds.indexOf(id); if (i >= 0) state.wantIds.splice(i, 1); else state.wantIds.push(id); render(); }
-  function toggleOffer(id) { var i = state.offerIds.indexOf(id); if (i >= 0) state.offerIds.splice(i, 1); else state.offerIds.push(id); render(); }
+  /* offrire in scambio l'oggetto attualmente usato come immagine profilo e' consentito
+     (l'utente potrebbe volerlo comunque), ma avvisiamo prima: se lo scambio va a buon
+     fine, l'immagine profilo passa automaticamente al prossimo oggetto in inventario. */
+  function toggleOffer(id) {
+    var i = state.offerIds.indexOf(id);
+    if (i >= 0) { state.offerIds.splice(i, 1); render(); return; }
+    if (id === profileItemId(state.inventory)) {
+      var ok = confirm("Questo oggetto è la tua immagine profilo attuale: se lo scambi, l'immagine profilo passerà automaticamente al prossimo oggetto in inventario. Continuare?");
+      if (!ok) return;
+    }
+    state.offerIds.push(id);
+    render();
+  }
   /* nomi degli oggetti selezionati, salvati nella proposta cosi' restano leggibili anche se l'oggetto viene poi modificato o eliminato */
   function namesForIds(ids, arr) {
     return ids.map(function (id) { var it = getItemById(id, arr); return it ? it.name : "?"; });
@@ -1024,10 +1056,17 @@
   }
 
   /* durata di una proposta di scambio: state.tradeDuration e' la stringa scelta nel form
-     ("" = nessuna scadenza, di default), oppure un numero di giorni come stringa ("1","3",...).
+     ("" = nessuna scadenza, di default), un numero di giorni come stringa ("1","3",...),
+     oppure un numero di ORE seguito da "h" ("1h","6h",...) per scadenze piu' brevi.
      Restituisce il timestamp di scadenza, o null se la proposta non scade mai. */
   function computeTradeExpiry() {
-    var days = parseInt(state.tradeDuration, 10);
+    var raw = state.tradeDuration || "";
+    if (!raw) return null;
+    if (raw.slice(-1) === "h") {
+      var hours = parseInt(raw, 10);
+      return (hours && hours > 0) ? Date.now() + hours * 60 * 60 * 1000 : null;
+    }
+    var days = parseInt(raw, 10);
     return (days && days > 0) ? Date.now() + days * 24 * 60 * 60 * 1000 : null;
   }
   /* true se una proposta ha una scadenza, non e' ancora stata accettata/rifiutata,
@@ -1447,7 +1486,11 @@
   /* selettore durata riusato in entrambi i form di proposta scambio (community e chat).
      Default "" = nessuna scadenza (infinita), coerente con lo stato iniziale del form. */
   function renderTradeDurationField() {
-    var opts = [["", "Nessuna scadenza"], ["1", "1 giorno"], ["3", "3 giorni"], ["7", "7 giorni"], ["14", "14 giorni"], ["30", "30 giorni"]];
+    var opts = [
+      ["", "Nessuna scadenza"],
+      ["1h", "1 ora"], ["3h", "3 ore"], ["6h", "6 ore"], ["12h", "12 ore"],
+      ["1", "1 giorno"], ["3", "3 giorni"], ["7", "7 giorni"], ["14", "14 giorni"], ["30", "30 giorni"]
+    ];
     return '<div class="field trade-duration-field"><label>Durata della proposta</label><select id="trade-duration">' +
       opts.map(function (o) { return '<option value="' + o[0] + '"' + (state.tradeDuration === o[0] ? " selected" : "") + '>' + o[1] + '</option>'; }).join("") +
       '</select></div>';
@@ -1494,6 +1537,7 @@
       html += '<div class="item-reorder">' +
         (reorder.idx > 0 ? '<button type="button" data-action="move-item-left" data-id="' + escapeHtml(item.id) + '" class="btn-move-item" title="Sposta prima">' + icon("chevron-left") + ' Prima</button>' : '<span></span>') +
         (reorder.idx < reorder.total - 1 ? '<button type="button" data-action="move-item-right" data-id="' + escapeHtml(item.id) + '" class="btn-move-item" title="Sposta dopo">Dopo ' + icon("chevron-left", "icon-flip-h") + '</button>' : '<span></span>') +
+        (!isProfile ? '<button type="button" data-action="set-profile-item" data-id="' + escapeHtml(item.id) + '" class="btn-move-item btn-set-profile" title="Imposta subito come immagine profilo">' + icon("star") + ' Profilo</button>' : '<span></span>') +
         '</div>';
     }
     if (isOwn) {
@@ -1513,7 +1557,7 @@
       html += '<div class="search-box-wrap"><input type="text" id="inventory-search" placeholder="Cerca..." value="' + escapeHtml(state.inventorySearch) + '"/>' + (state.inventorySearch ? '<button type="button" data-action="clear-search" data-target="inventory" class="btn-clear">' + icon("x") + '</button>' : '') + '</div>';
       var canReorder = !search && state.inventory.length > 1;
       var profileId = profileItemId(state.inventory);
-      if (canReorder) { html += '<p class="photos-hint">Usa "Prima"/"Dopo" per riordinare gli oggetti: il primo della lista (anche se non disponibile) è quello usato come immagine profilo in Community.</p>'; }
+      if (canReorder) { html += '<p class="photos-hint">Usa "Prima"/"Dopo" per riordinare gli oggetti, oppure "Profilo" per portarne subito uno in prima posizione: il primo della lista (anche se non disponibile) è quello usato come immagine profilo ovunque nell\'app.</p>'; }
       html += '<div class="items-grid">' + filtered.map(function (item) {
         var reorder = canReorder ? { idx: findItemIndexById(item.id, state.inventory), total: state.inventory.length, profileId: profileId } : null;
         return renderInventoryItem(item, true, reorder);
@@ -2088,6 +2132,7 @@
     else if (action === "delete-item") { deleteItem(t.dataset.id); }
     else if (action === "move-item-left") { moveInventoryItem(t.dataset.id, -1); }
     else if (action === "move-item-right") { moveInventoryItem(t.dataset.id, 1); }
+    else if (action === "set-profile-item") { setAsProfileItem(t.dataset.id); }
     else if (action === "open-user") { openUser(t.dataset.username); }
     else if (action === "back-to-community") { backToCommunity(); }
     else if (action === "refresh-community") { loadCommunity(); }
