@@ -479,6 +479,31 @@ input { font-family: inherit; }
   color: var(--brass);
   flex-shrink: 0;
 }
+/* avatar dell'utente collegato nel bottone profilo in header: ownAvatarHtml() avvolge
+   sia l'iconcina di scorta sia la foto vera in .profile-btn-avatar (non piu' un .icon
+   diretto), quindi la regola sopra da sola non lo raggiungeva piu' e la foto veniva
+   mostrata alla sua dimensione naturale invece che ritagliata nel tondo del bottone. */
+.profile-btn-avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  border-radius: 50%;
+  background: var(--brass-light);
+  color: var(--brass);
+  flex-shrink: 0;
+  overflow: hidden;
+}
+.profile-btn-avatar .icon { width: 1rem; height: 1rem; }
+.profile-btn-avatar--photo { background: var(--line); }
+.profile-btn-avatar--photo img,
+.profile-btn-avatar--photo video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
 .profile-btn .greet { white-space: nowrap; }
 
 .icon.spin-tiny { animation: spin 0.9s linear infinite; width: 1rem; height: 1rem; }
@@ -1214,9 +1239,38 @@ input { font-family: inherit; }
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+  overflow: hidden;
 }
 .chat-avatar .icon { width: 1.1rem; height: 1.1rem; }
 .chat-avatar.group { background: var(--line); color: var(--brass-dark); }
+/* la foto vera (userAvatarInner mette un <img>/<video> senza classe propria dentro
+   .chat-avatar--photo): senza queste regole l'immagine veniva mostrata alla sua
+   dimensione naturale, ne' tagliata a cerchio ne' scalata per riempire l'avatar. */
+.chat-avatar--photo { background: var(--line); }
+.chat-avatar--photo img,
+.chat-avatar--photo video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+/* avatar "impilato" per i gruppi (i primi 2 membri con foto): cerchi sovrapposti con un
+   bordo del colore dello sfondo per distinguerli, invece di stare semplicemente accostati */
+.chat-avatar-stack { display: flex; flex-shrink: 0; }
+.chat-avatar-stack .chat-avatar {
+  border: 2px solid var(--paper);
+  width: 1.9rem;
+  height: 1.9rem;
+}
+.chat-avatar-stack .chat-avatar:not(:first-child) { margin-left: -0.7rem; }
+/* avatar del mittente accanto ai messaggi nelle chat di gruppo: piu' piccolo dell'avatar
+   standard e allineato in basso, come nelle normali app di messaggistica */
+.chat-bubble-avatar {
+  width: 1.7rem;
+  height: 1.7rem;
+  align-self: flex-end;
+  margin-right: 0.4rem;
+}
 
 /* ---- area principale della conversazione ---- */
 .chat-main { display: flex; flex-direction: column; min-width: 0; }
