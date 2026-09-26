@@ -1125,10 +1125,13 @@ input { font-family: inherit; }
    ======================================================================= */
 @media (max-width: 560px) {
   .app-header .row { padding: 0.85rem 1rem 0.7rem; flex-wrap: wrap; row-gap: 0.5rem; }
-  .greet { display: none; }
-  /* su schermi stretti mostra solo le icone dei pulsanti dell'header (elimina account / esci):
-     il testo sparirebbe comunque tagliato fuori dallo schermo, quindi lo nascondiamo prima
-     che sia il layout a farlo in modo imprevedibile */
+  /* "Ciao, <nome>" ora resta visibile anche su schermi stretti (prima era nascosto con
+     .greet { display: none; }): qui lasciamo che il testo vada a capo dentro il pulsante
+     profilo invece di restare forzato su una riga sola, e che l'intera .header-right vada
+     a capo su piu' righe se non ci sta tutta affiancata (installa/profilo/elimina/esci),
+     cosi' non trabocca mai fuori dallo schermo invece di nascondere il saluto. */
+  .header-right { flex-wrap: wrap; justify-content: flex-end; row-gap: 0.4rem; }
+  .profile-btn .greet { white-space: normal; }
   .header-right .btn-label { display: none; }
   .header-right .btn-ghost { padding: 0.5rem; }
   .main { padding: 1.1rem 1rem 3rem; }

@@ -982,7 +982,7 @@
     e.preventDefault();
     var name = (state.newGroupName || "").trim();
     if (!name) { setMessage("Inserisci un nome per il gruppo.", "error"); return; }
-    if (!state.newGroupMembers.length) { setMessage("Seleziona almeno un amico.", "error"); return; }
+    if (state.newGroupMembers.length < 2) { setMessage("Seleziona almeno 2 amici: con uno solo è già una chat 1-a-1, non un gruppo.", "error"); return; }
     var group = { id: genId(), name: name, owner: state.currentUser, members: [state.currentUser].concat(state.newGroupMembers), created: Date.now() };
     dbSet("groups/" + group.id, group).then(function () {
       setState({ showGroupModal: false, newGroupName: "", newGroupMembers: [] });
@@ -1525,10 +1525,20 @@
      ALTRO utente registrato, il suo "firstItem" (il primo oggetto d'inventario, da cui si
      prende la foto/copertina). Qui la riusiamo per mostrare la vera immagine profilo anche
      in chat, lista amici, suggerimenti amicizia e membri di un gruppo, invece della sola
-     iconcina generica. Per l'utente stesso (mai presente in communityUsers, che esclude
-     sempre currentUser) si usa direttamente state.inventory con ownAvatarHtml(). */
+     iconcina generica.
+     Per l'utente che ha effettuato l'accesso, communityUsers non contiene mai una voce (lo
+     esclude sempre): senza il controllo qui sotto la sua foto risultava sempre "non
+     trovata" ovunque tranne che nell'header (che usa ownAvatarHtml() a parte) - in
+     particolare nella pila avatar di un gruppo di cui fa parte (dove, essendo sempre il
+     proprietario il primo membro, compariva quasi sempre) e accanto ai propri messaggi in
+     chat. Qui la si prende direttamente da state.inventory, come fa ownAvatarHtml(). */
   function findCommunityUserPhoto(username) {
     var uLower = String(username || "").toLowerCase();
+    if (state.currentUser && uLower === String(state.currentUser).toLowerCase()) {
+      var own = state.inventory && state.inventory[0];
+      var ownPhotos = own ? itemPhotos(own) : [];
+      return ownPhotos.length ? ownPhotos[0] : null;
+    }
     var u = (state.communityUsers || []).filter(function (x) { return x.uLower === uLower; })[0];
     if (!u || !u.firstItem) return null;
     var photos = itemPhotos(u.firstItem);
@@ -1909,7 +1919,7 @@
       '<div class="modal-header"><h2>Nuovo gruppo</h2><button type="button" data-action="close-group-modal" class="btn-close">' + icon("x") + '</button></div>' +
       '<form id="create-group-form" class="modal-body">' +
       '<div class="field"><label>Nome del gruppo</label><input id="new-group-name" type="text" placeholder="Es: Scambisti del quartiere" value="' + escapeHtml(state.newGroupName) + '"/></div>' +
-      '<div class="field"><label>Aggiungi amici</label>' +
+      '<div class="field"><label>Aggiungi amici</label><p class="photos-hint">Minimo 2 amici (con te fanno almeno 3 persone): con un solo amico sarebbe una chat 1-a-1, non un gruppo.</p>' +
       (friendsList.length
         ? '<div class="group-member-list">' + friendsList.map(function (f) {
             var sel = state.newGroupMembers.indexOf(f.username) !== -1;
