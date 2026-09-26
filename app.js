@@ -384,8 +384,14 @@
         if (sameUser(uLower, state.currentUser)) return;
         var record = usernames[uLower];
         var displayName = (record && record.username) ? record.username : uLower;
-        var items = toArray(invs[uLower]).filter(isAvailable);
-        users.push({ username: displayName, uLower: uLower, itemCount: items.length, firstItem: items[0] || null });
+        var allInv = toArray(invs[uLower]);
+        var items = allInv.filter(isAvailable);
+        /* l'immagine profilo mostrata in community e' la foto del PRIMO oggetto
+           dell'inventario nell'ordine scelto dall'utente (vedi riordino nella tab
+           Inventario), anche se quell'oggetto e' segnato come "non disponibile":
+           l'utente puo' cosi' scegliere liberamente la propria immagine profilo senza
+           dover per forza tenere quell'oggetto disponibile per lo scambio */
+        users.push({ username: displayName, uLower: uLower, itemCount: items.length, firstItem: allInv[0] || null });
         items.forEach(function (item) {
           var copy = Object.assign({}, item);
           copy.user = uLower;
@@ -479,7 +485,7 @@
         (t.fromUser || "").toLowerCase().indexOf(search) !== -1 ||
         (t.to || "").toLowerCase().indexOf(search) !== -1 ||
         (t.toUser || "").toLowerCase().indexOf(search) !== -1;
-      var matchFilter = filter === "completed" ? t.accepted : filter === "pending" ? !t.accepted && !t.declined : t.declined;
+      var matchFilter = filter === "completed" ? t.accepted : filter === "pending" ? (!t.accepted && !t.declined && !t.cancelled) : (t.declined || t.cancelled);
       var matchUser = !userFilter || sameUser(otherPartyOf(t), userFilter);
       var created = t.created || 0;
       var matchDate = (dateFrom === null || created >= dateFrom) && (dateTo === null || created <= dateTo);
@@ -701,11 +707,33 @@
   }
 
   /* ============ community & friends ============ */
+  /* prima di inviare una richiesta: rifiuta se e' il proprio nome, se esiste gia' un
+     rapporto (amico/richiesta in corso in un senso o nell'altro), e soprattutto se
+     quel nome utente non corrisponde a nessun account registrato (letto da
+     "usernames", leggibile da qualunque utente autenticato). Solo se l'utente esiste
+     davvero la richiesta viene effettivamente creata, usando la grafia esatta salvata
+     in "usernames" (record.username) invece di quella digitata, cosi' compare sempre
+     con le maiuscole/minuscole corrette a prescindere da come e' stata scritta. */
   function sendFriendRequest(username) {
-    var id = genId();
-    /* field names must match the DB rules: fromUser / toUser */
-    var req = { id: id, fromUser: state.currentUser, toUser: username, status: "pending", created: Date.now() };
-    dbSet("friendRequests/" + id, req).then(function () { setMessage("Richiesta inviata.", "success"); loadFriends(); }).catch(function (err) { setMessage("Errore: " + dbErrorMessage(err, err.message), "error"); });
+    var uname = (username || "").trim();
+    if (!uname) return;
+    if (sameUser(uname, state.currentUser)) { setMessage("Non puoi aggiungere te stesso.", "error"); return; }
+    var status = friendStatusFor(uname);
+    if (status === "accepted") { setMessage("Siete già amici.", "error"); return; }
+    if (status === "outgoing") { setMessage("Richiesta già inviata.", "error"); return; }
+    if (status === "pending") { setMessage("Questo utente ti ha già mandato una richiesta: rispondi da \"Richieste in arrivo\".", "error"); return; }
+    dbGet("usernames/" + uname.toLowerCase()).then(function (record) {
+      if (!record) { setMessage("Nessun utente trovato con questo nome.", "error"); return; }
+      var realUsername = record.username || uname;
+      var id = genId();
+      /* field names must match the DB rules: fromUser / toUser */
+      var req = { id: id, fromUser: state.currentUser, toUser: realUsername, status: "pending", created: Date.now() };
+      return dbSet("friendRequests/" + id, req).then(function () {
+        setMessage("Richiesta inviata.", "success");
+        state.friendInput = "";
+        loadFriends();
+      });
+    }).catch(function (err) { setMessage("Errore: " + dbErrorMessage(err, err.message), "error"); });
   }
 
   function respondFriendRequest(reqId, accept) {
@@ -991,7 +1019,7 @@
   /* true se una proposta ha una scadenza, non e' ancora stata accettata/rifiutata,
      ed e' passata la scadenza */
   function isTradeExpired(t) {
-    return !!(t && t.expiresAt && !t.accepted && !t.declined && Date.now() > t.expiresAt);
+    return !!(t && t.expiresAt && !t.accepted && !t.declined && !t.cancelled && Date.now() > t.expiresAt);
   }
   /* formatta la data/ora di scadenza di una proposta come "gg/mm alle hh:mm" */
   function formatTradeExpiry(ts) {
@@ -1107,9 +1135,9 @@
     tradeInFlight[tradeId] = true;
     dbGet("trades/" + tradeId).then(function (trade) {
       if (!trade) return null;
-      if (trade.accepted || trade.declined) {
+      if (trade.accepted || trade.declined || trade.cancelled) {
         /* lo scambio e' gia' stato gestito nel frattempo (doppio click, o l'altra
-           parte/un altro dispositivo ha gia' risposto): non rielaborarlo */
+           parte/un altro dispositivo ha gia' risposto, o e' stato annullato): non rielaborarlo */
         setMessage("Questo scambio è già stato gestito.", "error");
         loadTrades();
         return null;
@@ -1173,13 +1201,24 @@
   }
 
   function cancelTrade(tradeId) {
-    /* leggiamo la proposta PRIMA di cancellarla: dopo la remove() non sapremmo piu'
-       chi erano le due parti coinvolte, e quindi in quale chat mandare il messaggio
-       di sistema che avvisa dell'annullamento */
     dbGet("trades/" + tradeId).then(function (trade) {
-      return fbDb.ref("trades/" + tradeId).remove().then(function () {
+      if (!trade) return null;
+      if (trade.accepted || trade.declined || trade.cancelled) {
+        /* gia' concluso (o gia' annullato) nel frattempo, es. da un altro dispositivo:
+           non sovrascrivere l'esito reale */
+        setMessage("Questo scambio è già stato gestito.", "error");
+        loadTrades();
+        return null;
+      }
+      /* segniamo la proposta come annullata invece di cancellarla dal database (come
+         gia' avviene per accettazione/rifiuto): se la rimuovessimo del tutto, la card
+         di scambio gia' visibile in chat all'altra persona non avrebbe piu' modo di
+         sapere che quella proposta non esiste piu' e resterebbe bloccata su "In attesa"
+         con i pulsanti Accetta/Rifiuta ancora attivi (che fallirebbero se premuti) */
+      trade.cancelled = true;
+      return dbSet("trades/" + tradeId, trade).then(function () {
         setMessage("Scambio annullato.", "success");
-        if (trade) sendTradeSystemMessage(trade, "Scambio annullato.");
+        sendTradeSystemMessage(trade, "Scambio annullato.");
         loadTrades();
       });
     }).catch(function (err) { setMessage("Errore: " + err.message, "error"); });
@@ -1209,7 +1248,7 @@
      storico, cosi' non serve ricaricare manualmente la pagina per vedere l'esito. */
   var tradesLiveRef = null;
   var knownTradeStatus = {};
-  function tradeStatusOf(t) { return t.accepted ? "accepted" : t.declined ? "declined" : "pending"; }
+  function tradeStatusOf(t) { return t.accepted ? "accepted" : t.declined ? "declined" : t.cancelled ? "cancelled" : "pending"; }
   function attachTradesLiveWatch() {
     if (tradesLiveRef) return;
     tradesLiveRef = fbDb.ref("trades");
@@ -1227,14 +1266,19 @@
         knownTradeStatus[t.id] = cur;
       });
       if (justResolved.length) {
+        /* aggiorna sempre stato scambi/inventario, cosi' anche la card di scambio gia'
+           aperta in chat (che legge lo stato da state.allTrades) mostra subito l'esito
+           reale invece di restare bloccata su "In attesa", qualunque sia l'esito */
         loadTrades();
         loadInventory();
         var accepted = justResolved.filter(function (t) { return t.accepted; }).length;
-        var declined = justResolved.length - accepted;
+        var declined = justResolved.filter(function (t) { return t.declined; }).length;
+        var cancelled = justResolved.filter(function (t) { return t.cancelled; }).length;
         var parts = [];
         if (accepted) parts.push(accepted === 1 ? "Uno scambio è stato accettato" : accepted + " scambi sono stati accettati");
         if (declined) parts.push(declined === 1 ? "uno scambio è stato rifiutato" : declined + " scambi sono stati rifiutati");
-        setMessage(parts.join(", ") + " — inventario aggiornato.", accepted ? "success" : "error");
+        if (cancelled) parts.push(cancelled === 1 ? "una proposta è stata annullata" : cancelled + " proposte sono state annullate");
+        setMessage(parts.join(", ") + (accepted ? " — inventario aggiornato." : "."), accepted ? "success" : "error");
       }
     }, function (err) {
       setMessage(dbErrorMessage(err, "Errore aggiornamento scambi: " + err.message), "error");
@@ -1376,13 +1420,13 @@
       '</select></div>';
   }
 
-  /* id del primo oggetto DISPONIBILE nell'inventario: e' la sua foto ad essere usata come
-     "immagine profilo" dell'utente ovunque nella community (vedi loadCommunity: firstItem
-     e' items[0] dopo aver filtrato per isAvailable). Riordinare gli oggetti (o cambiarne
-     la disponibilita') cambia quindi anche l'immagine profilo mostrata agli altri. */
-  function firstAvailableItemId(inv) {
-    var found = (inv || []).filter(isAvailable)[0];
-    return found ? found.id : null;
+  /* id del primo oggetto dell'inventario (indipendentemente dal fatto che sia segnato
+     come disponibile o no): e' la sua foto ad essere usata come "immagine profilo"
+     dell'utente ovunque nella community (vedi loadCommunity: firstItem = allInv[0], non
+     filtrato per disponibilita'). Riordinare gli oggetti cambia quindi anche l'immagine
+     profilo mostrata agli altri, e va bene assegnarla anche a un oggetto non disponibile. */
+  function profileItemId(inv) {
+    return (inv && inv[0]) ? inv[0].id : null;
   }
 
   function renderInventoryItem(item, isOwn, reorder) {
@@ -1435,8 +1479,8 @@
     } else {
       html += '<div class="search-box-wrap"><input type="text" id="inventory-search" placeholder="Cerca..." value="' + escapeHtml(state.inventorySearch) + '"/>' + (state.inventorySearch ? '<button type="button" data-action="clear-search" data-target="inventory" class="btn-clear">' + icon("x") + '</button>' : '') + '</div>';
       var canReorder = !search && state.inventory.length > 1;
-      var profileId = firstAvailableItemId(state.inventory);
-      if (canReorder) { html += '<p class="photos-hint">Usa "Prima"/"Dopo" per riordinare gli oggetti: il primo disponibile è quello usato come immagine profilo in Community.</p>'; }
+      var profileId = profileItemId(state.inventory);
+      if (canReorder) { html += '<p class="photos-hint">Usa "Prima"/"Dopo" per riordinare gli oggetti: il primo della lista (anche se non disponibile) è quello usato come immagine profilo in Community.</p>'; }
       html += '<div class="items-grid">' + filtered.map(function (item) {
         var reorder = canReorder ? { idx: findItemIndexById(item.id, state.inventory), total: state.inventory.length, profileId: profileId } : null;
         return renderInventoryItem(item, true, reorder);
@@ -1545,7 +1589,29 @@
     var incoming = state.friends.filter(function (f) { return f.status === "pending"; });
     var outgoing = state.friends.filter(function (f) { return f.status === "outgoing"; });
     var accepted = state.friends.filter(function (f) { return f.status === "accepted"; });
-    var html = '<div class="page-header"><h2>Amici</h2></div><form id="add-friend-form" class="friend-add"><div class="field"><label>Aggiungi amico</label><input id="friend-username" type="text" placeholder="Nome utente" value="' + escapeHtml(state.friendInput) + '"/></div><button type="submit" class="btn-primary">Aggiungi</button></form>';
+    var html = '<div class="page-header"><h2>Amici</h2></div><form id="add-friend-form" class="friend-add"><div class="field"><label>Aggiungi amico</label><input id="friend-username" type="text" autocomplete="off" placeholder="Nome utente" value="' + escapeHtml(state.friendInput) + '"/></div><button type="submit" class="btn-primary">Aggiungi</button></form>';
+    /* suggerimenti mentre si scrive: utenti della community il cui nome contiene il
+       testo digitato (esclusi te stesso). Ogni riga mostra subito il rapporto attuale
+       (amico / richiesta in corso) invece del pulsante, cosi' non si prova a mandare
+       due volte la stessa richiesta. */
+    var query = (state.friendInput || "").trim().toLowerCase();
+    if (query) {
+      var suggestions = (state.communityUsers || []).filter(function (u) {
+        return u.username && u.username.toLowerCase().indexOf(query) !== -1;
+      }).slice(0, 6);
+      if (suggestions.length) {
+        html += '<div class="friend-suggestions">' + suggestions.map(function (u) {
+          var st = friendStatusFor(u.username);
+          var right = st === "accepted" ? '<span class="pill-muted">Già amico</span>'
+            : st === "outgoing" ? '<span class="pill-muted">Richiesta inviata</span>'
+            : st === "pending" ? '<span class="pill-muted">Ti ha scritto</span>'
+            : '<button type="button" data-action="suggest-add-friend" data-username="' + escapeHtml(u.username) + '" class="btn-ghost btn-sm">' + icon("user-plus") + ' Aggiungi</button>';
+          return '<div class="friend-suggestion-row"><span class="who"><div class="chat-avatar">' + icon("user") + '</div><span class="name">' + escapeHtml(u.username) + '</span></span>' + right + '</div>';
+        }).join("") + '</div>';
+      } else {
+        html += '<p class="photos-hint">Nessun utente della community corrisponde a questo nome: se sei sicuro dell\'ortografia puoi comunque premere "Aggiungi", verrà controllato di nuovo.</p>';
+      }
+    }
     if (incoming.length) { html += '<div class="section-title">Richieste in sospeso</div>' + incoming.map(function (r) { return '<div class="friend-card"><div class="who"><div>' + icon("user") + '</div><div><div class="name">' + escapeHtml(r.username || "") + '</div></div></div><div class="friend-actions"><button type="button" data-action="accept-friend" data-id="' + escapeHtml(r.id) + '" class="btn-ghost friend-accept">' + icon("user-check") + '</button><button type="button" data-action="decline-friend" data-id="' + escapeHtml(r.id) + '" class="btn-ghost">' + icon("x") + '</button></div></div>'; }).join(""); }
     if (outgoing.length) { html += '<div class="section-title">Richieste inviate</div>' + outgoing.map(function (r) { return '<div class="friend-card"><div class="who"><div>' + icon("user") + '</div><div><div class="name">' + escapeHtml(r.username || "") + '</div></div></div><div class="friend-actions"><span class="pill-muted">In attesa</span><button type="button" data-action="cancel-friend-request" data-id="' + escapeHtml(r.id) + '" class="btn-ghost">' + icon("x") + '</button></div></div>'; }).join(""); }
     if (accepted.length) { html += '<div class="section-title">Amici</div>' + accepted.map(function (f) { return '<div class="friend-card"><div class="who"><div>' + icon("user") + '</div><div><div class="name">' + escapeHtml(f.username || "") + '</div></div></div><div class="friend-actions"><button type="button" data-action="open-chat" data-username="' + escapeHtml(f.username || "") + '" class="btn-ghost" title="Chat">' + icon("message") + '</button><button type="button" data-action="open-friend" data-username="' + escapeHtml(f.username || "") + '" class="btn-ghost" title="Inventario">' + icon("inbox") + '</button><button type="button" data-action="remove-friend" data-id="' + escapeHtml(f.id) + '" data-username="' + escapeHtml(f.username || "") + '" class="btn-ghost">' + icon("x") + '</button></div></div>'; }).join(""); }
@@ -1595,7 +1661,7 @@
     if (type === "trade") {
       var trade = (state.allTrades || []).filter(function (t) { return t.id === m.tradeId; })[0];
       var expired = isTradeExpired(trade);
-      var status = trade ? (trade.accepted ? "accepted" : trade.declined ? "declined" : expired ? "expired" : "pending") : "pending";
+      var status = trade ? (trade.accepted ? "accepted" : trade.declined ? "declined" : trade.cancelled ? "cancelled" : expired ? "expired" : "pending") : "pending";
       var isRecipient = trade && sameUser(trade.toUser || trade.to, state.currentUser);
       var isSender = trade && sameUser(trade.fromUser || trade.from, state.currentUser);
       var want = (m.wantNames || (trade && trade.wantNames) || []).map(escapeHtml).join(", ") || "—";
@@ -1604,7 +1670,7 @@
         '<div class="chat-trade-title">' + icon("swap") + ' Proposta di scambio</div>' +
         '<div class="chat-trade-row"><span class="chat-trade-label">Vuole:</span> ' + want + '</div>' +
         '<div class="chat-trade-row"><span class="chat-trade-label">Offre:</span> ' + offer + '</div>' +
-        '<div class="chat-trade-status">' + (status === "accepted" ? "Accettato" : status === "declined" ? "Rifiutato" : status === "expired" ? "Scaduto" : "In attesa") + '</div>' +
+        '<div class="chat-trade-status">' + (status === "accepted" ? "Accettato" : status === "declined" ? "Rifiutato" : status === "cancelled" ? "Annullato" : status === "expired" ? "Scaduto" : "In attesa") + '</div>' +
         (status === "pending" ? renderTradeExpiryBadge(trade, "chat-trade-expiry") : "");
       if (status === "pending" && trade) {
         if (isRecipient) {
@@ -1754,7 +1820,7 @@
     var html = '<div class="page-header"><h2>Scambi</h2><div class="trade-filters">' +
       '<button type="button" data-action="history-filter" data-filter="completed" class="' + (state.historyFilter === "completed" ? "active" : "") + '">Completati</button>' +
       '<button type="button" data-action="history-filter" data-filter="pending" class="' + (state.historyFilter === "pending" ? "active" : "") + '">In attesa</button>' +
-      '<button type="button" data-action="history-filter" data-filter="declined" class="' + (state.historyFilter === "declined" ? "active" : "") + '">Rifiutati</button>' +
+      '<button type="button" data-action="history-filter" data-filter="declined" class="' + (state.historyFilter === "declined" ? "active" : "") + '">Rifiutati/Annullati</button>' +
       '</div></div>';
     html += '<div class="search-box-wrap"><input type="text" id="history-search" placeholder="Cerca..." value="' + escapeHtml(state.historySearch) + '"/>' + (state.historySearch ? '<button type="button" data-action="clear-search" data-target="history" class="btn-clear">' + icon("x") + '</button>' : '') + '</div>';
     /* filtro per utente (l'altra persona coinvolta nello scambio) e per intervallo di date */
@@ -1779,17 +1845,17 @@
         var isRecipient = sameUser(toU, state.currentUser);
         var other = escapeHtml(isSender ? toU : fromU);
         var expired = isTradeExpired(t);
-        var statusClass = t.accepted ? "accepted" : t.declined ? "declined" : expired ? "expired" : "pending";
-        var statusLabel = t.accepted ? "Accettato" : t.declined ? "Rifiutato" : expired ? "Scaduto" : "In attesa";
+        var statusClass = t.accepted ? "accepted" : t.declined ? "declined" : t.cancelled ? "cancelled" : expired ? "expired" : "pending";
+        var statusLabel = t.accepted ? "Accettato" : t.declined ? "Rifiutato" : t.cancelled ? "Annullato" : expired ? "Scaduto" : "In attesa";
         return '<div class="trade-card ' + statusClass + '">' +
           '<div class="trade-header"><span>' + (isSender ? "A: " : "Da: ") + other + '</span>' +
           '<span class="trade-status">' + statusLabel + '</span></div>' +
-          (!t.accepted && !t.declined ? renderTradeExpiryBadge(t, "trade-expiry") : "") +
+          (!t.accepted && !t.declined && !t.cancelled ? renderTradeExpiryBadge(t, "trade-expiry") : "") +
           ((t.wantNames && t.wantNames.length) || (t.offerNames && t.offerNames.length)
             ? '<div class="chat-trade-row"><span class="chat-trade-label">' + (isSender ? "Volevi:" : "Vuole:") + '</span> ' + (t.wantNames || []).map(escapeHtml).join(", ") + '</div>' +
               '<div class="chat-trade-row"><span class="chat-trade-label">' + (isSender ? "Offrivi:" : "Offre:") + '</span> ' + (t.offerNames || []).map(escapeHtml).join(", ") + '</div>'
             : '') +
-          (!t.accepted && !t.declined
+          (!t.accepted && !t.declined && !t.cancelled
             ? '<div class="trade-actions-inline">' +
               (isSender
                 ? '<button type="button" data-action="cancel-outgoing-trade" data-id="' + escapeHtml(t.id) + '" class="btn-ghost">' + icon("x") + ' Annulla</button>'
@@ -1995,6 +2061,7 @@
     else if (action === "refresh-trades") { loadTrades(); }
     else if (action === "refresh-friends") { loadFriends(); }
     else if (action === "add-friend") { sendFriendRequest(t.dataset.username); }
+    else if (action === "suggest-add-friend") { sendFriendRequest(t.dataset.username); }
     else if (action === "accept-friend") { respondFriendRequest(t.dataset.id, true); }
     else if (action === "decline-friend") { respondFriendRequest(t.dataset.id, false); }
     else if (action === "cancel-friend-request") { cancelFriendRequest(t.dataset.id); }
@@ -2057,7 +2124,7 @@
     else if (e.target && e.target.id === "edit-item-name") state.editItemName = e.target.value;
     else if (e.target && e.target.id === "auth-email") state.authEmail = e.target.value;
     else if (e.target && e.target.id === "new-username") state.usernameInput = e.target.value;
-    else if (e.target && e.target.id === "friend-username") state.friendInput = e.target.value;
+    else if (e.target && e.target.id === "friend-username") { state.friendInput = e.target.value; render(); }
     else if (e.target && e.target.id === "community-search") { state.communitySearch = e.target.value; render(); }
     else if (e.target && e.target.id === "inventory-search") { state.inventorySearch = e.target.value; syncSearchBox(e.target); updateInventoryResults(); }
     else if (e.target && e.target.id === "other-inventory-search") { state.otherUserSearch = e.target.value; syncSearchBox(e.target); render(); }
@@ -2083,9 +2150,11 @@
     e.preventDefault();
     var username = (state.friendInput || "").trim();
     if (!username) { setMessage("Inserisci un nome utente.", "error"); return; }
+    /* il campo NON viene svuotato qui: se il nome non esiste o c'e' gia' un rapporto,
+       sendFriendRequest mostra l'errore e l'utente puo' correggere senza doverlo
+       riscrivere da capo. Viene svuotato solo dentro sendFriendRequest, a richiesta
+       effettivamente inviata. */
     sendFriendRequest(username);
-    state.friendInput = "";
-    render();
   }
 
   /* ============ stato connessione (banner offline) ============
