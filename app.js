@@ -813,11 +813,12 @@
        in background anche dopo essere passati alla tab Community */
     if (state.tab === "chat") { detachChat(); clearPendingChatMedia(); }
     setState({ selectedUser: username, otherUserInventory: [], otherUserSearch: "", tab: "community", chatTarget: null });
+    requestScrollTop();
     getInventory(username.toLowerCase()).then(function (inv) { setState({ otherUserInventory: inv }); render(); });
     render();
     setHash("community/" + encodeURIComponent(username));
   }
-  function backToCommunity() { setState({ selectedUser: null, otherUserInventory: [], otherUserSearch: "" }); render(); setHash("community"); }
+  function backToCommunity() { setState({ selectedUser: null, otherUserInventory: [], otherUserSearch: "" }); requestScrollTop(); render(); setHash("community"); }
   function openFriend(username) { openUser(username); setState({ tab: "community" }); render(); }
 
   /* ============ chat (privata e di gruppo) ============ */
@@ -1476,9 +1477,13 @@
       thumbHtml = icon("package");
     }
     var unavailable = showAvailability && !isAvailable(item);
+    /* showAvailability e' vero solo per la lista "Offro" (i propri oggetti): li' ha senso
+       segnalare se quell'oggetto e' l'attuale immagine profilo, cosi' si sa a colpo
+       d'occhio a cosa si va incontro selezionandolo (vedi anche l'avviso in toggleOffer) */
+    var isProfile = showAvailability && item.id === profileItemId(state.inventory);
     return '<div class="trade-item ' + (selected ? "selected" : "") + (unavailable ? " trade-item-unavail" : "") + '" data-action="' + action + '" data-id="' + escapeHtml(item.id) + '">' +
       '<div class="trade-item-thumb' + (photos.length ? "" : " empty") + '">' + thumbHtml + '</div>' +
-      '<span class="trade-item-name">' + escapeHtml(item.name) + (unavailable ? ' <span class="trade-item-badge">non disponibile</span>' : '') + '</span>' +
+      '<span class="trade-item-name">' + escapeHtml(item.name) + (unavailable ? ' <span class="trade-item-badge">non disponibile</span>' : '') + (isProfile ? ' <span class="trade-item-badge trade-item-badge-profile">' + icon("star") + ' profilo</span>' : '') + '</span>' +
       (selected ? icon("check") : '') +
       '</div>';
   }
@@ -1503,6 +1508,59 @@
      profilo mostrata agli altri, e va bene assegnarla anche a un oggetto non disponibile. */
   function profileItemId(inv) {
     return (inv && inv[0]) ? inv[0].id : null;
+  }
+
+  /* ============ immagine profilo di un utente, riusata ovunque fuori dalla Community ============
+     state.communityUsers (caricato da loadCommunity all'accesso) contiene gia', per ogni
+     ALTRO utente registrato, il suo "firstItem" (il primo oggetto d'inventario, da cui si
+     prende la foto/copertina). Qui la riusiamo per mostrare la vera immagine profilo anche
+     in chat, lista amici, suggerimenti amicizia e membri di un gruppo, invece della sola
+     iconcina generica. Per l'utente stesso (mai presente in communityUsers, che esclude
+     sempre currentUser) si usa direttamente state.inventory con ownAvatarHtml(). */
+  function findCommunityUserPhoto(username) {
+    var uLower = String(username || "").toLowerCase();
+    var u = (state.communityUsers || []).filter(function (x) { return x.uLower === uLower; })[0];
+    if (!u || !u.firstItem) return null;
+    var photos = itemPhotos(u.firstItem);
+    return photos.length ? photos[0] : null;
+  }
+  /* contenuto interno (img/video oppure icona di scorta) per l'avatar di un utente */
+  function userAvatarInner(username) {
+    var p = findCommunityUserPhoto(username);
+    if (!p) return icon("user");
+    return isVideo(p)
+      ? '<video src="' + escapeHtml(photoUrl(p)) + '" muted playsinline preload="metadata"></video>'
+      : '<img src="' + escapeHtml(photoUrl(p)) + '" alt=""/>';
+  }
+  /* div .chat-avatar completo per un utente, con la foto se disponibile */
+  function userAvatarHtml(username, extraClass) {
+    var hasPhoto = !!findCommunityUserPhoto(username);
+    var cls = "chat-avatar" + (hasPhoto ? " chat-avatar--photo" : "") + (extraClass ? " " + extraClass : "");
+    return '<div class="' + cls + '">' + userAvatarInner(username) + '</div>';
+  }
+  /* avatar di un gruppo: una "pila" con le foto profilo dei primi 2 membri (quelle
+     disponibili), cosi' si riconosce a colpo d'occhio anche nella lista chat, invece della
+     sola iconcina "persone". Se nessun membro ha una foto, resta l'iconcina generica. */
+  function groupAvatarHtml(members) {
+    var ms = toArray(members).slice(0, 2);
+    if (!ms.length) return '<div class="chat-avatar group">' + icon("users") + '</div>';
+    return '<div class="chat-avatar-stack">' + ms.map(function (uname) {
+      var hasPhoto = !!findCommunityUserPhoto(uname);
+      return '<div class="chat-avatar' + (hasPhoto ? " chat-avatar--photo" : "") + '">' + userAvatarInner(uname) + '</div>';
+    }).join("") + '</div>';
+  }
+  /* immagine profilo dell'utente che ha effettuato l'accesso (usata nell'header dell'app):
+     a differenza di userAvatarHtml, qui la foto si prende da state.inventory (gia' in
+     memoria), non da communityUsers (che non include mai se stessi) */
+  function ownAvatarHtml() {
+    var first = state.inventory && state.inventory[0];
+    var photos = first ? itemPhotos(first) : [];
+    if (!photos.length) return '<span class="profile-btn-avatar">' + icon("user") + '</span>';
+    var p = photos[0];
+    var inner = isVideo(p)
+      ? '<video src="' + escapeHtml(photoUrl(p)) + '" muted playsinline preload="metadata"></video>'
+      : '<img src="' + escapeHtml(photoUrl(p)) + '" alt=""/>';
+    return '<span class="profile-btn-avatar profile-btn-avatar--photo">' + inner + '</span>';
   }
 
   function renderInventoryItem(item, isOwn, reorder) {
@@ -1684,15 +1742,15 @@
             : st === "outgoing" ? '<span class="pill-muted">Richiesta inviata</span>'
             : st === "pending" ? '<span class="pill-muted">Ti ha scritto</span>'
             : '<button type="button" data-action="suggest-add-friend" data-username="' + escapeHtml(u.username) + '" class="btn-ghost btn-sm">' + icon("user-plus") + ' Aggiungi</button>';
-          return '<div class="friend-suggestion-row"><span class="who"><div class="chat-avatar">' + icon("user") + '</div><span class="name">' + escapeHtml(u.username) + '</span></span>' + right + '</div>';
+          return '<div class="friend-suggestion-row"><span class="who">' + userAvatarHtml(u.username) + '<span class="name">' + escapeHtml(u.username) + '</span></span>' + right + '</div>';
         }).join("") + '</div>';
       } else {
         html += '<p class="photos-hint">Nessun utente della community corrisponde a questo nome: se sei sicuro dell\'ortografia puoi comunque premere "Aggiungi", verrà controllato di nuovo.</p>';
       }
     }
-    if (incoming.length) { html += '<div class="section-title">Richieste in sospeso</div>' + incoming.map(function (r) { return '<div class="friend-card"><div class="who"><div>' + icon("user") + '</div><div><div class="name">' + escapeHtml(r.username || "") + '</div></div></div><div class="friend-actions"><button type="button" data-action="accept-friend" data-id="' + escapeHtml(r.id) + '" class="btn-ghost friend-accept">' + icon("user-check") + '</button><button type="button" data-action="decline-friend" data-id="' + escapeHtml(r.id) + '" class="btn-ghost">' + icon("x") + '</button></div></div>'; }).join(""); }
-    if (outgoing.length) { html += '<div class="section-title">Richieste inviate</div>' + outgoing.map(function (r) { return '<div class="friend-card"><div class="who"><div>' + icon("user") + '</div><div><div class="name">' + escapeHtml(r.username || "") + '</div></div></div><div class="friend-actions"><span class="pill-muted">In attesa</span><button type="button" data-action="cancel-friend-request" data-id="' + escapeHtml(r.id) + '" class="btn-ghost">' + icon("x") + '</button></div></div>'; }).join(""); }
-    if (accepted.length) { html += '<div class="section-title">Amici</div>' + accepted.map(function (f) { return '<div class="friend-card"><div class="who"><div>' + icon("user") + '</div><div><div class="name">' + escapeHtml(f.username || "") + '</div></div></div><div class="friend-actions"><button type="button" data-action="open-chat" data-username="' + escapeHtml(f.username || "") + '" class="btn-ghost" title="Chat">' + icon("message") + '</button><button type="button" data-action="open-friend" data-username="' + escapeHtml(f.username || "") + '" class="btn-ghost" title="Inventario">' + icon("inbox") + '</button><button type="button" data-action="remove-friend" data-id="' + escapeHtml(f.id) + '" data-username="' + escapeHtml(f.username || "") + '" class="btn-ghost">' + icon("x") + '</button></div></div>'; }).join(""); }
+    if (incoming.length) { html += '<div class="section-title">Richieste in sospeso</div>' + incoming.map(function (r) { return '<div class="friend-card"><div class="who">' + userAvatarHtml(r.username || "") + '<div><div class="name">' + escapeHtml(r.username || "") + '</div></div></div><div class="friend-actions"><button type="button" data-action="accept-friend" data-id="' + escapeHtml(r.id) + '" class="btn-ghost friend-accept">' + icon("user-check") + '</button><button type="button" data-action="decline-friend" data-id="' + escapeHtml(r.id) + '" class="btn-ghost">' + icon("x") + '</button></div></div>'; }).join(""); }
+    if (outgoing.length) { html += '<div class="section-title">Richieste inviate</div>' + outgoing.map(function (r) { return '<div class="friend-card"><div class="who">' + userAvatarHtml(r.username || "") + '<div><div class="name">' + escapeHtml(r.username || "") + '</div></div></div><div class="friend-actions"><span class="pill-muted">In attesa</span><button type="button" data-action="cancel-friend-request" data-id="' + escapeHtml(r.id) + '" class="btn-ghost">' + icon("x") + '</button></div></div>'; }).join(""); }
+    if (accepted.length) { html += '<div class="section-title">Amici</div>' + accepted.map(function (f) { return '<div class="friend-card"><div class="who">' + userAvatarHtml(f.username || "") + '<div><div class="name">' + escapeHtml(f.username || "") + '</div></div></div><div class="friend-actions"><button type="button" data-action="open-chat" data-username="' + escapeHtml(f.username || "") + '" class="btn-ghost" title="Chat">' + icon("message") + '</button><button type="button" data-action="open-friend" data-username="' + escapeHtml(f.username || "") + '" class="btn-ghost" title="Inventario">' + icon("inbox") + '</button><button type="button" data-action="remove-friend" data-id="' + escapeHtml(f.id) + '" data-username="' + escapeHtml(f.username || "") + '" class="btn-ghost">' + icon("x") + '</button></div></div>'; }).join(""); }
     if (!incoming.length && !outgoing.length && !accepted.length) { html += '<div class="empty-state"><p>Nessun amico ancora. Inizia ad aggiungerne!</p></div>'; }
     return html;
   }
@@ -1709,7 +1767,7 @@
       html += '<div class="chat-list-section-title">Gruppi</div>' + state.groups.map(function (g) {
         var active = state.chatTarget && state.chatTarget.type === "group" && state.chatTarget.id === g.id;
         return '<div class="chat-friend-card ' + (active ? "active" : "") + '" data-action="open-group-chat" data-id="' + escapeHtml(g.id) + '">' +
-          '<div class="who"><div class="chat-avatar group">' + icon("users") + '</div><div><div class="name">' + escapeHtml(g.name || "") + '</div><div class="chat-sub">' + toArray(g.members).length + ' membri</div></div></div>' +
+          '<div class="who">' + groupAvatarHtml(g.members) + '<div><div class="name">' + escapeHtml(g.name || "") + '</div><div class="chat-sub">' + toArray(g.members).length + ' membri</div></div></div>' +
           icon("message") + '</div>';
       }).join("");
     }
@@ -1717,7 +1775,7 @@
       html += '<div class="chat-list-section-title">Amici</div>' + accepted.map(function (f) {
         var active = state.chatTarget && state.chatTarget.type === "friend" && sameUser(state.chatTarget.id, f.username);
         return '<div class="chat-friend-card ' + (active ? "active" : "") + '" data-action="open-chat" data-username="' + escapeHtml(f.username || "") + '">' +
-          '<div class="who"><div class="chat-avatar">' + icon("user") + '</div><div><div class="name">' + escapeHtml(f.username || "") + '</div></div></div>' +
+          '<div class="who">' + userAvatarHtml(f.username || "") + '<div><div class="name">' + escapeHtml(f.username || "") + '</div></div></div>' +
           icon("message") + '</div>';
       }).join("");
     }
@@ -1776,7 +1834,7 @@
     var profileAttrs = !isGroup ? ' data-action="open-user" data-username="' + escapeHtml(target.id) + '"' : '';
     html += '<div class="chat-thread-header"><button type="button" data-action="close-chat" class="btn-icon-left mobile-only">' + icon("chevron-left") + '</button>' +
       '<div class="chat-thread-profile' + (!isGroup ? " clickable" : "") + '"' + profileAttrs + (!isGroup ? ' title="Vai all\'inventario di ' + escapeHtml(target.name) + '"' : '') + '>' +
-      '<div class="chat-avatar ' + (isGroup ? "group" : "") + '">' + icon(isGroup ? "users" : "user") + '</div>' +
+      (isGroup ? groupAvatarHtml(target.members) : userAvatarHtml(target.id)) +
       '<div class="chat-thread-title"><h2>' + escapeHtml(target.name) + '</h2>' + (isGroup ? '<div class="chat-sub">' + toArray(target.members).length + ' membri</div>' : '<div class="chat-sub">Vedi inventario</div>') + '</div>' +
       '</div>' +
       '<div class="chat-thread-actions">' +
@@ -1792,7 +1850,9 @@
         if (m.type === "system") { return '<div class="chat-system-row">' + renderChatMessageContent(m) + '</div>'; }
         var own = sameUser(m.from, state.currentUser);
         var showSender = isGroup && !own;
-        return '<div class="chat-bubble-row ' + (own ? "own" : "") + '"><div class="chat-bubble ' + ((m.type === "image" || m.type === "video") ? "chat-bubble-has-media" : "") + '">' +
+        return '<div class="chat-bubble-row ' + (own ? "own" : "") + (showSender ? " has-avatar" : "") + '">' +
+          (showSender ? userAvatarHtml(m.from, "chat-bubble-avatar") : '') +
+          '<div class="chat-bubble ' + ((m.type === "image" || m.type === "video") ? "chat-bubble-has-media" : "") + '">' +
           (showSender ? '<div class="chat-bubble-sender clickable" data-action="open-user" data-username="' + escapeHtml(m.from) + '" title="Vai all\'inventario di ' + escapeHtml(m.from) + '">' + escapeHtml(m.from) + '</div>' : '') +
           renderChatMessageContent(m) +
           '<div class="chat-bubble-time">' + formatChatTime(m.created) + '</div>' +
@@ -1848,7 +1908,7 @@
         ? '<div class="group-member-list">' + friendsList.map(function (f) {
             var sel = state.newGroupMembers.indexOf(f.username) !== -1;
             return '<div class="group-member-row ' + (sel ? "selected" : "") + '" data-action="toggle-group-member" data-username="' + escapeHtml(f.username) + '">' +
-              '<div class="who"><div class="chat-avatar">' + icon("user") + '</div><span>' + escapeHtml(f.username) + '</span></div>' +
+              '<div class="who">' + userAvatarHtml(f.username) + '<span>' + escapeHtml(f.username) + '</span></div>' +
               '<div class="select-check-inline">' + (sel ? icon("check") : "") + '</div></div>';
           }).join("") + '</div>'
         : '<p class="chat-sub">Aggiungi prima qualche amico per poter creare un gruppo.</p>') +
@@ -1989,7 +2049,7 @@
       '<header class="app-header"><div class="row"><span class="wordmark display">Baratto</span>' +
         '<div class="header-right">' +
         (state.installAvailable ? '<button data-action="install-app" class="btn-ghost" title="Installa l\'app">' + icon("package") + ' Installa</button>' : '') +
-        '<button type="button" data-action="go-profile" class="profile-btn" title="Il mio inventario">' + icon("user") + '<span class="greet">Ciao, <strong>' + escapeHtml(state.currentUser) + '</strong></span></button>' +
+        '<button type="button" data-action="go-profile" class="profile-btn" title="Il mio inventario">' + ownAvatarHtml() + '<span class="greet">Ciao, <strong>' + escapeHtml(state.currentUser) + '</strong></span></button>' +
         '<button data-action="open-delete-account-confirm" class="btn-ghost" title="Elimina account">' + icon("trash") + '</button>' +
         '<button data-action="logout" class="btn-ghost">' + icon("logout") + " Esci</button></div></div>" +
         '<div class="tab-nav">' + tabsHtml + "</div></header>" +
@@ -2040,6 +2100,19 @@
     return '<div class="offline-banner">' + icon("alert-circle") + '<span>Sei offline: l\'app resta aperta, ma i dati non si aggiornano finché la connessione non torna.</span></div>';
   }
 
+  /* ============ scroll della FINESTRA attraverso i render ============
+     Come per lo scroll interno della chat (vedi sotto), ogni render() ricostruisce tutto
+     #app da zero: senza questa conservazione, qualunque interazione (aprire un modale,
+     spuntare una checkbox, digitare in un campo, ecc.) mentre si e' scrollati piu' in basso
+     nella pagina - es. la lista Community, o gli scambi in "Scambi" - farebbe scattare la
+     pagina (e con essa la barra in alto, che essendo "sticky" resta comunque visibile in
+     cima) di nuovo in cima, dando l'impressione che "la barra si sposti" cliccandola.
+     Le VERE navigazioni (cambio tab, apertura di una chat o del profilo di un altro utente,
+     ecc.) devono invece riportare la vista in cima: quelle chiamano requestScrollTop()
+     prima di render(), cosi' sappiamo di dover resettare invece di conservare. */
+  var pendingScrollTop = false;
+  function requestScrollTop() { pendingScrollTop = true; }
+
   function render() {
     if (state.booting) {
       document.getElementById("app").innerHTML = '<div class="auth-wrap"><div class="auth-box" style="text-align:center;">' + icon("loader", "spin-sm") + "</div></div>";
@@ -2054,6 +2127,7 @@
        aggiornamento di stato (es. aprire il modale "Scambio" in chat, o qualunque altra
        azione), anche quando non c'entra nulla con quell'elemento. Salviamo qui le
        posizioni prima della sostituzione e le ripristiniamo subito dopo. */
+    var savedWindowScroll = window.scrollY || window.pageYOffset || document.documentElement.scrollTop || 0;
     var chatEl = document.getElementById("chat-messages");
     var chatScroll = null;
     if (chatEl) {
@@ -2069,6 +2143,8 @@
       var newChatEl = document.getElementById("chat-messages");
       if (newChatEl) { newChatEl.scrollTop = chatScroll.atBottom ? newChatEl.scrollHeight : chatScroll.top; }
     }
+    if (pendingScrollTop) { window.scrollTo(0, 0); pendingScrollTop = false; }
+    else if (savedWindowScroll) { window.scrollTo(0, savedWindowScroll); }
     /* la barra delle tab (.tab-nav) scorre in orizzontale su schermi stretti: senza
        questo, cliccare una tab la ricreava sempre scrollata all'inizio, "nascondendo"
        la tab appena selezionata se non era la prima.
