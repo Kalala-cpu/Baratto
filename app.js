@@ -225,7 +225,18 @@
 
   function setState(changes) { Object.assign(state, changes); }
 
-  function setMessage(text, type) { state.message = { text: text, type: type || "success" }; setTimeout(function () { state.message = null; }, 4000); render(); }
+  function setMessage(text, type) {
+    var msg = { text: text, type: type || "success" };
+    state.message = msg;
+    /* il timeout deve anche richiamare render(), altrimenti il banner resta visibile
+       per sempre finche' non capita un altro cambiamento di stato qualsiasi (bug: prima
+       veniva solo svuotato lo stato, senza ridisegnare). Il controllo "state.message === msg"
+       evita che un timer vecchio cancelli un messaggio piu' recente mostrato nel frattempo. */
+    setTimeout(function () {
+      if (state.message === msg) { state.message = null; render(); }
+    }, 4000);
+    render();
+  }
 
   /* ============ utility per items ============ */
   function getItemById(id, arr) { return arr && arr.find(function (i) { return i && i.id === id; }); }
@@ -293,10 +304,12 @@
     e.preventDefault();
     var name = (state.newItemName || "").trim();
     if (!name) { setMessage("Inserisci il nome dell'oggetto.", "error"); return; }
-    setState({ showAddItem: false });
+    /* il modale si chiude solo in caso di successo: prima veniva chiuso subito, quindi
+       se il salvataggio falliva (es. permesso negato, connessione assente) il nome e le
+       foto gia' inserite andavano persi senza che l'utente potesse riprovare */
     var item = { id: genId(), name: name, photos: state.newItemPhotos, available: true, created: Date.now() };
     updateInventory(state.currentUser.toLowerCase(), function (inv) { inv.push(item); return inv; }).then(function () {
-      setState({ newItemName: "", newItemPhotos: [] });
+      setState({ showAddItem: false, newItemName: "", newItemPhotos: [] });
       setMessage("Oggetto aggiunto con successo.", "success");
       loadInventory();
     }).catch(function (err) { setMessage("Errore: " + err.message, "error"); });
@@ -307,7 +320,6 @@
     e.preventDefault();
     var name = (state.editItemName || "").trim();
     if (!name) { setMessage("Inserisci il nome dell'oggetto.", "error"); return; }
-    setState({ showEditItem: false });
     var editId = state.editItemId;
     updateInventory(state.currentUser.toLowerCase(), function (inv) {
       var idx = findItemIndexById(editId, inv);
@@ -318,7 +330,7 @@
       }
       return inv;
     }).then(function () {
-      setState({ editItemId: null, editItemName: "", editItemPhotos: [] });
+      setState({ showEditItem: false, editItemId: null, editItemName: "", editItemPhotos: [] });
       setMessage("Oggetto modificato con successo.", "success");
       loadInventory();
     }).catch(function (err) { setMessage("Errore: " + err.message, "error"); });
@@ -729,8 +741,8 @@
       /* field names must match the DB rules: fromUser / toUser */
       var req = { id: id, fromUser: state.currentUser, toUser: realUsername, status: "pending", created: Date.now() };
       return dbSet("friendRequests/" + id, req).then(function () {
-        setMessage("Richiesta inviata.", "success");
         state.friendInput = "";
+        setMessage("Richiesta inviata.", "success");
         loadFriends();
       });
     }).catch(function (err) { setMessage("Errore: " + dbErrorMessage(err, err.message), "error"); });
@@ -871,6 +883,8 @@
     setState({ chatInput: "" });
     render();
     dbSet(path + "/" + msgId, msg).catch(function (err) {
+      /* invio fallito: ripristina il testo digitato, altrimenti andrebbe perso */
+      setState({ chatInput: text });
       setMessage(dbErrorMessage(err, "Errore invio: " + err.message), "error");
     });
   }
@@ -1248,20 +1262,34 @@
      storico, cosi' non serve ricaricare manualmente la pagina per vedere l'esito. */
   var tradesLiveRef = null;
   var knownTradeStatus = {};
+  var tradesLiveFirstSnapshot = true;
   function tradeStatusOf(t) { return t.accepted ? "accepted" : t.declined ? "declined" : t.cancelled ? "cancelled" : "pending"; }
   function attachTradesLiveWatch() {
     if (tradesLiveRef) return;
     tradesLiveRef = fbDb.ref("trades");
+    tradesLiveFirstSnapshot = true;
     tradesLiveRef.on("value", function (snap) {
       var mine = toArray(snap.val()).filter(function (t) {
         var fromU = t.fromUser || t.from || "";
         var toU = t.toUser || t.to || "";
         return sameUser(fromU, state.currentUser) || sameUser(toU, state.currentUser);
       });
+      /* al primissimo evento (appena ci si e' collegati) "mine" contiene tutti gli
+         scambi gia' esistenti: li registriamo soltanto, senza trattarli come "nuovi"
+         (altrimenti al login comparirebbe una notifica per ogni scambio passato) */
+      var isFirstSnapshot = tradesLiveFirstSnapshot;
+      tradesLiveFirstSnapshot = false;
       var justResolved = [];
+      var hasNewIncoming = false;
       mine.forEach(function (t) {
         var prev = knownTradeStatus[t.id];
         var cur = tradeStatusOf(t);
+        if (!isFirstSnapshot && prev === undefined) {
+          /* proposta arrivata proprio ora (non solo un cambio di stato di una gia'
+             conosciuta): senza questo controllo, chi ha gia' la tab Scambi aperta non
+             vedrebbe mai una nuova proposta ricevuta finche' non cambia tab manualmente */
+          hasNewIncoming = true;
+        }
         if (prev === "pending" && cur !== "pending" && !tradeInFlight[t.id]) justResolved.push(t);
         knownTradeStatus[t.id] = cur;
       });
@@ -1279,6 +1307,11 @@
         if (declined) parts.push(declined === 1 ? "uno scambio è stato rifiutato" : declined + " scambi sono stati rifiutati");
         if (cancelled) parts.push(cancelled === 1 ? "una proposta è stata annullata" : cancelled + " proposte sono state annullate");
         setMessage(parts.join(", ") + (accepted ? " — inventario aggiornato." : "."), accepted ? "success" : "error");
+      } else if (hasNewIncoming) {
+        /* nessun banner per non essere invadenti (la proposta compare gia' come card
+           in chat, che ha il suo listener dedicato): qui basta aggiornare in silenzio
+           la tab Scambi, se e' quella aperta in questo momento */
+        loadTrades();
       }
     }, function (err) {
       setMessage(dbErrorMessage(err, "Errore aggiornamento scambi: " + err.message), "error");
@@ -1287,6 +1320,7 @@
   function detachTradesLiveWatch() {
     if (tradesLiveRef) { tradesLiveRef.off("value"); tradesLiveRef = null; }
     knownTradeStatus = {};
+    tradesLiveFirstSnapshot = true;
   }
 
   /* ============ lightbox ============ */
@@ -1313,7 +1347,6 @@
   }
   function syncSearchBox(el) { if (el && el.parentElement) { el.parentElement.classList.toggle("search-active", el.value.length > 0); } }
   function updateInventoryResults() {
-    var search = (state.inventorySearch || "").toLowerCase();
     render();
   }
 
@@ -1321,10 +1354,7 @@
   function renderAddItemModal() {
     var photos = state.newItemPhotos;
     return '' +
-      '<div id="add-item-overlay" class="modal-overlay"></div>' +
-      '<div class="modal">' +
-      '<div class="modal-header"><h2>Aggiungi Oggetto</h2><button type="button" data-action="close-add-item" class="btn-close">' + icon("x") + '</button></div>' +
-      '<form id="add-item-form" class="modal-body">' +
+      '<div id="add-item-overlay" class="modal-overlay" data-action="close-add-item"></div>' +
       '<div class="field"><label>Nome</label><input id="new-item-name" type="text" placeholder="Es: Bicicletta blu" value="' + escapeHtml(state.newItemName) + '"/></div>' +
       '<div class="photos-section"><label>Foto (' + photos.length + '/' + MAX_ITEM_PHOTOS + ')</label>' +
       '<div class="photos-grid">' + photos.map(function (p, idx) {
@@ -1348,7 +1378,7 @@
   function renderEditItemModal() {
     var photos = state.editItemPhotos;
     return '' +
-      '<div id="add-item-overlay" class="modal-overlay"></div>' +
+      '<div id="edit-item-overlay" class="modal-overlay" data-action="close-edit-item"></div>' +
       '<div class="modal">' +
       '<div class="modal-header"><h2>Modifica Oggetto</h2><button type="button" data-action="close-edit-item" class="btn-close">' + icon("x") + '</button></div>' +
       '<form id="edit-item-form" class="modal-body">' +
@@ -1501,7 +1531,8 @@
       html += '<div class="empty-state"><p>Nessun altro utente registrato.</p></div>';
     } else {
       html += '<div class="community-users-grid">' + filtered.map(function (u) {
-        /* show a thumbnail from their first available item, if any */
+        /* mostra una miniatura dal primo oggetto dell'inventario dell'utente (l'ordine e'
+           scelto da lui riordinando la sua tab Inventario), se ne ha uno con una foto */
         var thumb = '';
         if (u.firstItem) {
           var photos = itemPhotos(u.firstItem);
@@ -1589,7 +1620,7 @@
     var incoming = state.friends.filter(function (f) { return f.status === "pending"; });
     var outgoing = state.friends.filter(function (f) { return f.status === "outgoing"; });
     var accepted = state.friends.filter(function (f) { return f.status === "accepted"; });
-    var html = '<div class="page-header"><h2>Amici</h2></div><form id="add-friend-form" class="friend-add"><div class="field"><label>Aggiungi amico</label><input id="friend-username" type="text" autocomplete="off" placeholder="Nome utente" value="' + escapeHtml(state.friendInput) + '"/></div><button type="submit" class="btn-primary">Aggiungi</button></form>';
+    var html = '<div class="page-header"><h2>Amici</h2><button type="button" data-action="refresh-friends" class="btn-ghost" title="Aggiorna">' + icon("refresh") + '</button></div><form id="add-friend-form" class="friend-add"><div class="field"><label>Aggiungi amico</label><input id="friend-username" type="text" autocomplete="off" placeholder="Nome utente" value="' + escapeHtml(state.friendInput) + '"/></div><button type="submit" class="btn-primary">Aggiungi</button></form>';
     /* suggerimenti mentre si scrive: utenti della community il cui nome contiene il
        testo digitato (esclusi te stesso). Ogni riga mostra subito il rapporto attuale
        (amico / richiesta in corso) invece del pulsante, cosi' non si prova a mandare
@@ -1817,7 +1848,7 @@
 
   function renderTradesTab() {
     var search = (state.historySearch || "").toLowerCase();
-    var html = '<div class="page-header"><h2>Scambi</h2><div class="trade-filters">' +
+    var html = '<div class="page-header"><div class="page-header-title"><h2>Scambi</h2><button type="button" data-action="refresh-trades" class="btn-ghost btn-icon" title="Aggiorna">' + icon("refresh") + '</button></div><div class="trade-filters">' +
       '<button type="button" data-action="history-filter" data-filter="completed" class="' + (state.historyFilter === "completed" ? "active" : "") + '">Completati</button>' +
       '<button type="button" data-action="history-filter" data-filter="pending" class="' + (state.historyFilter === "pending" ? "active" : "") + '">In attesa</button>' +
       '<button type="button" data-action="history-filter" data-filter="declined" class="' + (state.historyFilter === "declined" ? "active" : "") + '">Rifiutati/Annullati</button>' +
@@ -2015,7 +2046,6 @@
 
   /* ============ gestione eventi (delegazione) ============ */
   document.addEventListener("click", function (e) {
-    if (e.target && e.target.id === "add-item-overlay") { state.showAddItem = false; render(); return; }
     /* chiudi il lightbox anche cliccando fuori dalla foto/video (non solo sull'overlay,
        che di fatto e' sempre coperto dal contenitore .lightbox a schermo intero) */
     if (e.target && (e.target.id === "lightbox-overlay" || e.target.classList.contains("lightbox"))) { closeLightbox(); return; }
