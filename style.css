@@ -688,6 +688,19 @@ input { font-family: inherit; }
 }
 .avail-toggle input { accent-color: var(--brass); width: 1rem; height: 1rem; }
 
+/* date di una card nella propria collezione: da quando ci e' entrata e, se diversa
+   (oggetto arrivato tramite scambio), da quando esiste in origine nell'app */
+.item-dates { margin-top: 0.4rem; display: flex; flex-direction: column; gap: 0.15rem; }
+.item-date {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.7rem;
+  color: var(--ink-soft);
+}
+.item-date .icon { width: 0.7rem; height: 0.7rem; flex-shrink: 0; }
+.item-date-origin { opacity: 0.8; }
+
 .item-select { position: relative; cursor: pointer; }
 .select-check {
   position: absolute;
@@ -842,7 +855,7 @@ input { font-family: inherit; }
 .btn-move-photo:hover { background: var(--brass); }
 .btn-move-photo .icon { width: 0.7rem; height: 0.7rem; }
 .btn-move-photo-spacer { width: 1.2rem; height: 1.2rem; }
-.photos-hint { font-size: 0.72rem; color: var(--ink-soft); margin: 0.5rem 0 0; }
+.photos-hint { font-size: 0.72rem; color: var(--ink-soft); margin: 0.5rem 0 1rem; }
 
 .photo-upload {
   width: 76px;

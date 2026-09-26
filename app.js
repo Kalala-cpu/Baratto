@@ -19,6 +19,7 @@
     trash: '<path d="M4 7h16"/><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/><path d="M6 7l1 12.5A1.5 1.5 0 0 0 8.5 21h7a1.5 1.5 0 0 0 1.5-1.5L18 7"/>',
     edit: '<path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/>',
     clock: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
+    calendar: '<rect x="3.5" y="5" width="17" height="15" rx="1.5"/><path d="M3.5 9.5h17"/><path d="M8 3v4M16 3v4"/>',
     inbox: '<path d="M4 12h4l2 3h4l2-3h4"/><path d="M5.5 5h13l1.5 7v6a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 18v-6l1.5-7z"/>',
     send: '<path d="M4 12l16-8-6 16-3-7-7-1z"/>',
     "alert-circle": '<circle cx="12" cy="12" r="8.5"/><path d="M12 8v5"/><path d="M12 16h.01"/>',
@@ -308,7 +309,11 @@
     /* il modale si chiude solo in caso di successo: prima veniva chiuso subito, quindi
        se il salvataggio falliva (es. permesso negato, connessione assente) il nome e le
        foto gia' inserite andavano persi senza che l'utente potesse riprovare */
-    var item = { id: genId(), name: name, photos: state.newItemPhotos, available: true, created: Date.now() };
+    var now = Date.now();
+    /* 'created': data di aggiunta in origine all'app, non cambia mai neanche se l'oggetto
+       cambia proprietario tramite scambio. 'acquired': data di ingresso nella collezione
+       attuale, aggiornata a ogni scambio che lo fa passare di mano (vedi respondTrade) */
+    var item = { id: genId(), name: name, photos: state.newItemPhotos, available: true, created: now, acquired: now };
     updateInventory(state.currentUser.toLowerCase(), function (inv) { inv.push(item); return inv; }).then(function () {
       setState({ showAddItem: false, newItemName: "", newItemPhotos: [] });
       setMessage("Oggetto aggiunto con successo.", "success");
@@ -969,6 +974,28 @@
     var mm = d.getMinutes().toString().padStart(2, "0");
     return hh + ":" + mm;
   }
+  var ITEM_DATE_MONTHS = ["gen", "feb", "mar", "apr", "mag", "giu", "lug", "ago", "set", "ott", "nov", "dic"];
+  function formatItemDate(ts) {
+    if (!ts) return "";
+    var d = new Date(ts);
+    return d.getDate() + " " + ITEM_DATE_MONTHS[d.getMonth()] + " " + d.getFullYear();
+  }
+  /* date di una card della propria collezione: 'acquired' e' da quando l'oggetto e'
+     entrato nella collezione attuale (all'aggiunta, o al momento di uno scambio che lo
+     ha fatto cambiare proprietario); 'created' e' da quando esiste in origine nell'app e
+     non cambia mai. Per gli oggetti mai scambiati le due coincidono: mostriamo la
+     seconda riga solo quando sono diverse, per non ripetere la stessa data due volte.
+     Fallback su 'created' se 'acquired' manca (oggetti salvati prima di questa modifica). */
+  function renderItemDatesHtml(item) {
+    var addedTs = item.acquired || item.created;
+    var originTs = item.created;
+    if (!addedTs && !originTs) return "";
+    var html = '<div class="item-dates">';
+    if (addedTs) html += '<div class="item-date">' + icon("calendar") + ' Nella tua collezione dal ' + formatItemDate(addedTs) + '</div>';
+    if (originTs && originTs !== addedTs) html += '<div class="item-date item-date-origin">' + icon("clock") + ' Nell\'app dal ' + formatItemDate(originTs) + '</div>';
+    html += '</div>';
+    return html;
+  }
 
   /* ============ gruppi ============ */
   function openGroupModal() { setState({ showGroupModal: true, newGroupName: "", newGroupMembers: [] }); render(); }
@@ -994,14 +1021,18 @@
   }
   function leaveGroup(groupId) {
     if (!confirm("Uscire da questo gruppo?")) return;
+    var dissolved = false;
     dbGet("groups/" + groupId).then(function (g) {
       if (!g) return;
       var members = toArray(g.members).filter(function (m) { return !sameUser(m, state.currentUser); });
-      if (!members.length) return fbDb.ref("groups/" + groupId).remove();
+      /* un gruppo con meno di 3 persone non ha piu' senso di esistere come gruppo (con 2
+         persone sarebbe solo una chat 1-a-1, non un gruppo): se uscendo ne restano meno
+         di 3, sciogliamo il gruppo invece di lasciarlo cosi' */
+      if (members.length < 3) { dissolved = true; return fbDb.ref("groups/" + groupId).remove(); }
       g.members = members;
       return dbSet("groups/" + groupId, g);
     }).then(function () {
-      setMessage("Hai lasciato il gruppo.", "success");
+      setMessage(dissolved ? "Hai lasciato il gruppo: essendo rimaste meno di 3 persone, il gruppo è stato sciolto." : "Hai lasciato il gruppo.", "success");
       closeChat();
       loadGroups();
     }).catch(function (err) { setMessage("Errore: " + err.message, "error"); });
@@ -1204,6 +1235,9 @@
         if (offerItems.length !== offerIds.length || wantItems.length !== wantIds.length) {
           throw new Error("Alcuni oggetti coinvolti non sono più disponibili: lo scambio non può essere completato.");
         }
+        var swapTs = Date.now();
+        offerItems.forEach(function (it) { it.acquired = swapTs; });
+        wantItems.forEach(function (it) { it.acquired = swapTs; });
         return updateInventory(fromU, function (inv) {
           return inv.filter(function (it) { return offerIds.indexOf(it.id) === -1; }).concat(wantItems);
         }).then(function () {
@@ -1616,6 +1650,7 @@
     }
     if (isOwn) {
       html += '<label class="avail-toggle"><input type="checkbox" data-id="' + escapeHtml(item.id) + '" ' + (av ? "checked" : "") + '><span>' + (av ? "Disponibile" : "Non disponibile") + '</span></label>';
+      html += renderItemDatesHtml(item);
     }
     html += '</div></div>';
     return html;
