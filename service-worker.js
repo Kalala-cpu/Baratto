@@ -3,7 +3,7 @@
    anche offline o con connessione instabile. I dati (inventari, chat, scambi)
    restano gestiti da Firebase e richiedono comunque una connessione. */
 
-var CACHE_VERSION = "baratto-v3";
+var CACHE_VERSION = "baratto-v4";
 var APP_SHELL = [
   "./",
   "./index.html",
@@ -40,8 +40,11 @@ self.addEventListener("activate", function (event) {
 });
 
 /* strategia:
-   - navigazioni (apertura app): network-first, con fallback su index.html in cache (per funzionare offline)
-   - file dello "shell" (stessa origine: html/css/js/icone/manifest): cache-first, poi rete
+   - navigazioni (apertura app) e file dello "shell" (stessa origine: html/css/js/icone/
+     manifest): network-first. Da online si prende sempre la versione fresca dal sito (mai
+     quella vecchia in cache, anche se presente); la cache viene comunque aggiornata ad ogni
+     richiesta riuscita e scatta SOLO come rete di sicurezza quando la rete non risponde
+     (offline, o connessione che cade a meta'), cosi' l'app resta comunque apribile.
    - richieste verso Firebase (auth/database) e altre API: mai intercettate, sempre in rete */
 self.addEventListener("fetch", function (event) {
   var req = event.request;
@@ -62,15 +65,14 @@ self.addEventListener("fetch", function (event) {
 
   if (url.origin === self.location.origin) {
     event.respondWith(
-      caches.match(req).then(function (cached) {
-        var network = fetch(req).then(function (resp) {
-          if (resp && resp.ok) {
-            var copy = resp.clone();
-            caches.open(CACHE_VERSION).then(function (cache) { cache.put(req, copy); });
-          }
-          return resp;
-        }).catch(function () { return cached; });
-        return cached || network;
+      fetch(req).then(function (resp) {
+        if (resp && resp.ok) {
+          var copy = resp.clone();
+          caches.open(CACHE_VERSION).then(function (cache) { cache.put(req, copy); });
+        }
+        return resp;
+      }).catch(function () {
+        return caches.match(req);
       })
     );
   }
