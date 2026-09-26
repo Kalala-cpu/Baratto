@@ -203,6 +203,7 @@
     allTrades: [],
     friends: [],
     friendInput: "",
+    friendsSearch: "",
     lightbox: null,
     groups: [],
     showGroupModal: false,
@@ -211,6 +212,7 @@
     chatTarget: null,
     chatMessages: [],
     chatInput: "",
+    chatSearch: "",
     chatOtherInventory: [],
     showChatTradeBuilder: false,
     pendingChatMedia: null,
@@ -600,6 +602,7 @@
         allTrades: [],
         friends: [],
         friendInput: "",
+        friendsSearch: "",
         lightbox: null,
         groups: [],
         showGroupModal: false,
@@ -608,6 +611,7 @@
         chatTarget: null,
         chatMessages: [],
         chatInput: "",
+        chatSearch: "",
         chatOtherInventory: [],
         showChatTradeBuilder: false,
         otherUserSearch: "",
@@ -1427,6 +1431,8 @@
     else if (target === "history") { setState({ historySearch: "", historyLimit: HISTORY_PAGE }); updateHistory(); }
     else if (target === "historyFilters") { setState({ historyUserFilter: "", historyDateFrom: "", historyDateTo: "", historyLimit: HISTORY_PAGE }); updateHistory(); }
     else if (target === "otherInventory") { setState({ otherUserSearch: "" }); render(); }
+    else if (target === "chat") { setState({ chatSearch: "" }); render(); }
+    else if (target === "friends") { setState({ friendsSearch: "" }); render(); }
   }
   function syncSearchBox(el) { if (el && el.parentElement) { el.parentElement.classList.toggle("search-active", el.value.length > 0); } }
   function updateInventoryResults() {
@@ -1730,7 +1736,8 @@
     var search = (state.otherUserSearch || "").toLowerCase();
     var availableOther = state.otherUserInventory.filter(isAvailable);
     var filteredOther = availableOther.filter(function (i) { return !search || i.name.toLowerCase().indexOf(search) !== -1; });
-    var html = '<div class="page-header"><button type="button" data-action="back-to-community" class="btn-icon-left">' + icon("chevron-left") + ' Indietro</button><h2>' + escapeHtml(state.selectedUser) + '</h2>' + friendBtnHtml + '</div>';
+    var html = '<div class="page-header"><button type="button" data-action="back-to-community" class="btn-icon-left">' + icon("chevron-left") + ' Indietro</button>' +
+      '<h2 class="user-page-name clickable" data-action="open-chat" data-username="' + escapeHtml(state.selectedUser) + '" title="Apri chat con ' + escapeHtml(state.selectedUser) + '">' + escapeHtml(state.selectedUser) + '</h2>' + friendBtnHtml + '</div>';
     if (state.otherUserInventory.length === 0) {
       html += '<div class="empty-state"><p>Nessun oggetto disponibile.</p></div>';
     } else {
@@ -1799,10 +1806,16 @@
         html += '<p class="photos-hint">Nessun utente della community corrisponde a questo nome: se sei sicuro dell\'ortografia puoi comunque premere "Aggiungi", verrà controllato di nuovo.</p>';
       }
     }
-    if (incoming.length) { html += '<div class="section-title">Richieste in sospeso</div>' + incoming.map(function (r) { return '<div class="friend-card"><div class="who">' + userAvatarHtml(r.username || "") + '<div><div class="name">' + escapeHtml(r.username || "") + '</div></div></div><div class="friend-actions"><button type="button" data-action="accept-friend" data-id="' + escapeHtml(r.id) + '" class="btn-ghost friend-accept">' + icon("user-check") + '</button><button type="button" data-action="decline-friend" data-id="' + escapeHtml(r.id) + '" class="btn-ghost">' + icon("x") + '</button></div></div>'; }).join(""); }
-    if (outgoing.length) { html += '<div class="section-title">Richieste inviate</div>' + outgoing.map(function (r) { return '<div class="friend-card"><div class="who">' + userAvatarHtml(r.username || "") + '<div><div class="name">' + escapeHtml(r.username || "") + '</div></div></div><div class="friend-actions"><span class="pill-muted">In attesa</span><button type="button" data-action="cancel-friend-request" data-id="' + escapeHtml(r.id) + '" class="btn-ghost">' + icon("x") + '</button></div></div>'; }).join(""); }
-    if (accepted.length) { html += '<div class="section-title">Amici</div>' + accepted.map(function (f) { return '<div class="friend-card"><div class="who clickable" data-action="open-chat" data-username="' + escapeHtml(f.username || "") + '" title="Apri chat con ' + escapeHtml(f.username || "") + '">' + userAvatarHtml(f.username || "") + '<div><div class="name">' + escapeHtml(f.username || "") + '</div></div></div><div class="friend-actions"><button type="button" data-action="open-chat" data-username="' + escapeHtml(f.username || "") + '" class="btn-ghost" title="Chat">' + icon("message") + '</button><button type="button" data-action="open-friend" data-username="' + escapeHtml(f.username || "") + '" class="btn-ghost" title="Inventario">' + icon("inbox") + '</button><button type="button" data-action="remove-friend" data-id="' + escapeHtml(f.id) + '" data-username="' + escapeHtml(f.username || "") + '" class="btn-ghost">' + icon("x") + '</button></div></div>'; }).join(""); }
-    if (!incoming.length && !outgoing.length && !accepted.length) { html += '<div class="empty-state"><p>Nessun amico ancora. Inizia ad aggiungerne!</p></div>'; }
+    if (incoming.length || outgoing.length || accepted.length) {
+      html += '<div class="search-box-wrap"><input type="text" id="friends-search" placeholder="Cerca nei tuoi amici..." value="' + escapeHtml(state.friendsSearch) + '"/>' + (state.friendsSearch ? '<button type="button" data-action="clear-search" data-target="friends" class="btn-clear">' + icon("x") + '</button>' : '') + '</div>';
+    }
+    var fSearch = (state.friendsSearch || "").toLowerCase();
+    var byName = function (arr) { return fSearch ? arr.filter(function (f) { return (f.username || "").toLowerCase().indexOf(fSearch) !== -1; }) : arr; };
+    var fIncoming = byName(incoming), fOutgoing = byName(outgoing), fAccepted = byName(accepted);
+    if (fIncoming.length) { html += '<div class="section-title">Richieste in sospeso</div>' + fIncoming.map(function (r) { return '<div class="friend-card"><div class="who">' + userAvatarHtml(r.username || "") + '<div><div class="name">' + escapeHtml(r.username || "") + '</div></div></div><div class="friend-actions"><button type="button" data-action="accept-friend" data-id="' + escapeHtml(r.id) + '" class="btn-ghost friend-accept">' + icon("user-check") + '</button><button type="button" data-action="decline-friend" data-id="' + escapeHtml(r.id) + '" class="btn-ghost">' + icon("x") + '</button></div></div>'; }).join(""); }
+    if (fOutgoing.length) { html += '<div class="section-title">Richieste inviate</div>' + fOutgoing.map(function (r) { return '<div class="friend-card"><div class="who">' + userAvatarHtml(r.username || "") + '<div><div class="name">' + escapeHtml(r.username || "") + '</div></div></div><div class="friend-actions"><span class="pill-muted">In attesa</span><button type="button" data-action="cancel-friend-request" data-id="' + escapeHtml(r.id) + '" class="btn-ghost">' + icon("x") + '</button></div></div>'; }).join(""); }
+    if (fAccepted.length) { html += '<div class="section-title">Amici</div>' + fAccepted.map(function (f) { return '<div class="friend-card"><div class="who clickable" data-action="open-chat" data-username="' + escapeHtml(f.username || "") + '" title="Apri chat con ' + escapeHtml(f.username || "") + '">' + userAvatarHtml(f.username || "") + '<div><div class="name">' + escapeHtml(f.username || "") + '</div></div></div><div class="friend-actions"><button type="button" data-action="open-chat" data-username="' + escapeHtml(f.username || "") + '" class="btn-ghost" title="Chat">' + icon("message") + '</button><button type="button" data-action="open-friend" data-username="' + escapeHtml(f.username || "") + '" class="btn-ghost" title="Inventario">' + icon("inbox") + '</button><button type="button" data-action="remove-friend" data-id="' + escapeHtml(f.id) + '" data-username="' + escapeHtml(f.username || "") + '" class="btn-ghost">' + icon("x") + '</button></div></div>'; }).join(""); }
+    if (!fIncoming.length && !fOutgoing.length && !fAccepted.length) { html += '<div class="empty-state"><p>' + (fSearch ? "Nessun amico trovato." : "Nessun amico ancora. Inizia ad aggiungerne!") + '</p></div>'; }
     return html;
   }
 
@@ -1813,17 +1826,21 @@
       html += '<div class="empty-state"><p>Aggiungi qualche amico per iniziare a chattare.</p></div>';
       return html;
     }
+    var search = (state.chatSearch || "").toLowerCase();
+    html += '<div class="search-box-wrap"><input type="text" id="chat-search" placeholder="Cerca chat..." value="' + escapeHtml(state.chatSearch) + '"/>' + (state.chatSearch ? '<button type="button" data-action="clear-search" data-target="chat" class="btn-clear">' + icon("x") + '</button>' : '') + '</div>';
+    var filteredGroups = search ? state.groups.filter(function (g) { return (g.name || "").toLowerCase().indexOf(search) !== -1; }) : state.groups;
+    var filteredFriends = search ? accepted.filter(function (f) { return (f.username || "").toLowerCase().indexOf(search) !== -1; }) : accepted;
     html += '<div class="chat-friend-list">';
-    if (state.groups.length) {
-      html += '<div class="chat-list-section-title">Gruppi</div>' + state.groups.map(function (g) {
+    if (filteredGroups.length) {
+      html += '<div class="chat-list-section-title">Gruppi</div>' + filteredGroups.map(function (g) {
         var active = state.chatTarget && state.chatTarget.type === "group" && state.chatTarget.id === g.id;
         return '<div class="chat-friend-card ' + (active ? "active" : "") + '" data-action="open-group-chat" data-id="' + escapeHtml(g.id) + '">' +
           '<div class="who">' + groupAvatarHtml(g.members) + '<div><div class="name">' + escapeHtml(g.name || "") + '</div><div class="chat-sub">' + toArray(g.members).length + ' membri</div></div></div>' +
           icon("message") + '</div>';
       }).join("");
     }
-    if (accepted.length) {
-      html += '<div class="chat-list-section-title">Amici</div>' + accepted.map(function (f) {
+    if (filteredFriends.length) {
+      html += '<div class="chat-list-section-title">Amici</div>' + filteredFriends.map(function (f) {
         var active = state.chatTarget && state.chatTarget.type === "friend" && sameUser(state.chatTarget.id, f.username);
         return '<div class="chat-friend-card ' + (active ? "active" : "") + '" data-action="open-chat" data-username="' + escapeHtml(f.username || "") + '">' +
           '<div class="who">' + userAvatarHtml(f.username || "") + '<div><div class="name">' + escapeHtml(f.username || "") + '</div></div></div>' +
@@ -1831,6 +1848,7 @@
       }).join("");
     }
     html += '</div>';
+    if (search && !filteredGroups.length && !filteredFriends.length) { html += '<div class="empty-state"><p>Nessun risultato.</p></div>'; }
     return html;
   }
 
@@ -2404,6 +2422,8 @@
     else if (e.target && e.target.id === "other-inventory-search") { state.otherUserSearch = e.target.value; syncSearchBox(e.target); render(); }
     else if (e.target && e.target.id === "history-search") { state.historySearch = e.target.value; state.historyLimit = HISTORY_PAGE; syncSearchBox(e.target); updateHistory(); }
     else if (e.target && e.target.id === "chat-input") { state.chatInput = e.target.value; }
+    else if (e.target && e.target.id === "chat-search") { state.chatSearch = e.target.value; syncSearchBox(e.target); render(); }
+    else if (e.target && e.target.id === "friends-search") { state.friendsSearch = e.target.value; syncSearchBox(e.target); render(); }
     else if (e.target && e.target.id === "new-group-name") { state.newGroupName = e.target.value; }
   });
 
@@ -2515,6 +2535,7 @@
           allTrades: [],
           friends: [],
           friendInput: "",
+          friendsSearch: "",
           lightbox: null,
           groups: [],
           showGroupModal: false,
@@ -2523,6 +2544,7 @@
           chatTarget: null,
           chatMessages: [],
           chatInput: "",
+          chatSearch: "",
           chatOtherInventory: [],
           showChatTradeBuilder: false,
           otherUserSearch: "",
