@@ -660,8 +660,8 @@ input { font-family: inherit; }
 }
 .item-profile-badge .icon { width: 0.65rem; height: 0.65rem; }
 
-/* riordino della posizione dell'oggetto in inventario */
-.item-reorder { display: flex; justify-content: space-between; gap: 0.4rem; margin-top: 0.5rem; }
+/* pulsante per impostare un oggetto come immagine profilo (prima posizione) */
+.item-reorder { display: flex; justify-content: flex-start; gap: 0.4rem; margin-top: 0.5rem; }
 .btn-move-item {
   display: flex;
   align-items: center;

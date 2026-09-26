@@ -337,33 +337,16 @@
     }).catch(function (err) { setMessage("Errore: " + err.message, "error"); });
   }
 
-  /* ============ riordino oggetti inventario ============
-     Sposta un oggetto di una posizione (dir -1 = prima, +1 = dopo). L'ordine locale
-     cambia subito per reattivita', poi la stessa coppia di oggetti (identificati per id,
-     non per indice) viene scambiata anche lato server dentro una transazione, cosi' un
-     eventuale altro salvataggio concorrente (es. un'altra scheda aperta) non viene
-     sovrascritto ne' spezza l'ordine. */
-  function moveInventoryItem(itemId, dir) {
-    var inv = state.inventory;
-    var idx = findItemIndexById(itemId, inv);
-    var targetIdx = idx + dir;
-    if (idx < 0 || targetIdx < 0 || targetIdx >= inv.length) return;
-    var targetId = inv[targetIdx].id;
-    var tmp = inv[idx]; inv[idx] = inv[targetIdx]; inv[targetIdx] = tmp;
-    render();
-    updateInventory(state.currentUser.toLowerCase(), function (serverInv) {
-      var i1 = findItemIndexById(itemId, serverInv), i2 = findItemIndexById(targetId, serverInv);
-      if (i1 >= 0 && i2 >= 0) { var t = serverInv[i1]; serverInv[i1] = serverInv[i2]; serverInv[i2] = t; }
-      return serverInv;
-    }).then(function () { loadInventory(); }).catch(function (err) {
-      setMessage("Errore: " + err.message, "error");
-      loadInventory();
-    });
-  }
-
-  /* scorciatoia: sposta direttamente un oggetto in prima posizione (immagine profilo),
-     senza dover premere piu' volte "Prima". Stessa logica ottimistica + transazione
-     di moveInventoryItem, ma con splice/unshift invece di uno scambio di coppia. */
+  /* ============ immagine profilo dall'inventario ============
+     Il primo oggetto dell'inventario (indipendentemente dalla disponibilita') e' quello
+     usato come immagine profilo ovunque nell'app (vedi profileItemId piu' sotto). Questa
+     funzione lo porta in prima posizione: l'ordine locale cambia subito per reattivita',
+     poi lo stesso spostamento (identificato per id, non per indice) viene rifatto anche
+     lato server dentro una transazione, cosi' un eventuale altro salvataggio concorrente
+     (es. un'altra scheda aperta) non viene sovrascritto ne' spezza l'ordine.
+     Non e' previsto nessun riordino manuale libero degli oggetti (niente "sposta prima"/
+     "sposta dopo"): l'unica azione possibile sulla posizione e' questa, per tenere la
+     UI dell'inventario semplice. */
   function setAsProfileItem(itemId) {
     var inv = state.inventory;
     var idx = findItemIndexById(itemId, inv);
@@ -1520,7 +1503,7 @@
     var opts = [
       ["", "Nessuna scadenza"],
       ["1h", "1 ora"], ["3h", "3 ore"], ["6h", "6 ore"], ["12h", "12 ore"],
-      ["1", "1 giorno"], ["3", "3 giorni"], ["7", "7 giorni"], ["14", "14 giorni"], ["30", "30 giorni"]
+      ["1", "24 ore"], ["3", "3 giorni"], ["7", "7 giorni"], ["14", "14 giorni"], ["30", "30 giorni"]
     ];
     return '<div class="field trade-duration-field"><label>Durata della proposta</label><select id="trade-duration">' +
       opts.map(function (o) { return '<option value="' + o[0] + '"' + (state.tradeDuration === o[0] ? " selected" : "") + '>' + o[1] + '</option>'; }).join("") +
@@ -1530,8 +1513,9 @@
   /* id del primo oggetto dell'inventario (indipendentemente dal fatto che sia segnato
      come disponibile o no): e' la sua foto ad essere usata come "immagine profilo"
      dell'utente ovunque nella community (vedi loadCommunity: firstItem = allInv[0], non
-     filtrato per disponibilita'). Riordinare gli oggetti cambia quindi anche l'immagine
-     profilo mostrata agli altri, e va bene assegnarla anche a un oggetto non disponibile. */
+     filtrato per disponibilita'). Usare "Profilo" su un altro oggetto (setAsProfileItem)
+     cambia quindi anche l'immagine profilo mostrata agli altri, e va bene assegnarla
+     anche a un oggetto non disponibile. */
   function profileItemId(inv) {
     return (inv && inv[0]) ? inv[0].id : null;
   }
@@ -1613,15 +1597,11 @@
         '</div>';
     }
     html += '</div>';
-    if (isOwn && reorder) {
-      /* riordino della posizione dell'oggetto nell'inventario: sposta anche la sua
-         eventuale posizione come "primo oggetto disponibile" (immagine profilo).
-         Nascosto durante una ricerca, perche' l'ordine visibile sarebbe solo un
-         sottoinsieme filtrato e non corrisponderebbe alle posizioni reali da scambiare. */
+    if (isOwn && reorder && !isProfile) {
+      /* unica azione possibile sulla posizione: portare subito questo oggetto come
+         immagine profilo (prima posizione). Nessun riordino libero degli altri oggetti. */
       html += '<div class="item-reorder">' +
-        (reorder.idx > 0 ? '<button type="button" data-action="move-item-left" data-id="' + escapeHtml(item.id) + '" class="btn-move-item" title="Sposta prima">' + icon("chevron-left") + ' Prima</button>' : '<span></span>') +
-        (reorder.idx < reorder.total - 1 ? '<button type="button" data-action="move-item-right" data-id="' + escapeHtml(item.id) + '" class="btn-move-item" title="Sposta dopo">Dopo ' + icon("chevron-left", "icon-flip-h") + '</button>' : '<span></span>') +
-        (!isProfile ? '<button type="button" data-action="set-profile-item" data-id="' + escapeHtml(item.id) + '" class="btn-move-item btn-set-profile" title="Imposta subito come immagine profilo">' + icon("star") + ' Profilo</button>' : '<span></span>') +
+        '<button type="button" data-action="set-profile-item" data-id="' + escapeHtml(item.id) + '" class="btn-move-item btn-set-profile" title="Imposta come immagine profilo">' + icon("star") + ' Imposta come profilo</button>' +
         '</div>';
     }
     if (isOwn) {
@@ -1639,11 +1619,11 @@
       html += '<div class="empty-state"><p>Nessun oggetto. Aggiungi il primo!</p></div>';
     } else {
       html += '<div class="search-box-wrap"><input type="text" id="inventory-search" placeholder="Cerca..." value="' + escapeHtml(state.inventorySearch) + '"/>' + (state.inventorySearch ? '<button type="button" data-action="clear-search" data-target="inventory" class="btn-clear">' + icon("x") + '</button>' : '') + '</div>';
-      var canReorder = !search && state.inventory.length > 1;
+      var canSetProfile = !search && state.inventory.length > 1;
       var profileId = profileItemId(state.inventory);
-      if (canReorder) { html += '<p class="photos-hint">Usa "Prima"/"Dopo" per riordinare gli oggetti, oppure "Profilo" per portarne subito uno in prima posizione: il primo della lista (anche se non disponibile) è quello usato come immagine profilo ovunque nell\'app.</p>'; }
+      if (canSetProfile) { html += '<p class="photos-hint">Usa "Imposta come profilo" su un oggetto per usarlo come immagine profilo: è quella dell\'oggetto in prima posizione, mostrata agli altri ovunque nell\'app.</p>'; }
       html += '<div class="items-grid">' + filtered.map(function (item) {
-        var reorder = canReorder ? { idx: findItemIndexById(item.id, state.inventory), total: state.inventory.length, profileId: profileId } : null;
+        var reorder = canSetProfile ? { profileId: profileId } : null;
         return renderInventoryItem(item, true, reorder);
       }).join("") + '</div>';
       if (filtered.length === 0) { html += '<div class="empty-state"><p>Nessun risultato.</p></div>'; }
@@ -2083,12 +2063,32 @@
       '</div>';
   }
 
-  function renderApp() {
+  /* ============ header (barra in alto) ============
+     Costruisce SOLO l'header: viene tenuto separato dal resto (renderAppBody piu' sotto)
+     perche' in render() lo scriviamo nel DOM solo quando il suo HTML e' davvero cambiato,
+     invece di ricrearlo ad ogni singolo render come il resto dell'app. Vedi il commento
+     su #app-header-slot in render() per il motivo. */
+  function renderHeader() {
     var tabsHtml = '<button type="button" data-action="switch-tab" data-tab="inventory" class="' + (state.tab === "inventory" ? "active" : "") + '">' + icon("package") + ' Inventario</button>' +
       '<button type="button" data-action="switch-tab" data-tab="community" class="' + (state.tab === "community" ? "active" : "") + '">' + icon("users") + ' Community</button>' +
       '<button type="button" data-action="switch-tab" data-tab="friends" class="' + (state.tab === "friends" ? "active" : "") + '">' + icon("user-plus") + ' Amici</button>' +
       '<button type="button" data-action="switch-tab" data-tab="chat" class="' + (state.tab === "chat" ? "active" : "") + '">' + icon("message") + ' Chat</button>' +
       '<button type="button" data-action="switch-tab" data-tab="trades" class="' + (state.tab === "trades" ? "active" : "") + '">' + icon("swap") + ' Scambi</button>';
+    return '<header class="app-header"><div class="row"><span class="wordmark display">Baratto</span>' +
+        '<div class="header-right">' +
+        (state.installAvailable ? '<button data-action="install-app" class="btn-ghost" title="Installa l\'app">' + icon("package") + ' Installa</button>' : '') +
+        '<button type="button" data-action="go-profile" class="profile-btn" title="Il mio inventario">' + ownAvatarHtml() + '<span class="greet">Ciao, <strong>' + escapeHtml(state.currentUser) + '</strong></span></button>' +
+        '<button data-action="open-delete-account-confirm" class="btn-ghost" title="Elimina account">' + icon("trash") + '</button>' +
+        '<button data-action="logout" class="btn-ghost">' + icon("logout") + " Esci</button></div></div>" +
+        '<div class="tab-nav">' + tabsHtml + "</div></header>";
+  }
+
+  /* ============ tutto cio' che sta SOTTO l'header ============
+     A differenza dell'header, questo viene ricostruito da zero ad ogni render() (vedi
+     #app-body-slot in render()): non ha bisogno di essere "persistente" perche' non ha
+     uno stato del browser (scroll orizzontale, ecc.) da preservare oltre a quello di cui
+     render() gia' si occupa esplicitamente (scroll della finestra, scroll della chat, focus). */
+  function renderAppBody() {
     var tabContent = '';
     if (state.tab === "inventory") tabContent = renderInventoryTab();
     else if (state.tab === "community") tabContent = state.selectedUser ? renderOtherUserView() : renderCommunityTab();
@@ -2096,15 +2096,7 @@
     else if (state.tab === "chat") tabContent = renderChatTab();
     else if (state.tab === "trades") tabContent = renderTradesTab();
 
-    return '' +
-      '<header class="app-header"><div class="row"><span class="wordmark display">Baratto</span>' +
-        '<div class="header-right">' +
-        (state.installAvailable ? '<button data-action="install-app" class="btn-ghost" title="Installa l\'app">' + icon("package") + ' Installa</button>' : '') +
-        '<button type="button" data-action="go-profile" class="profile-btn" title="Il mio inventario">' + ownAvatarHtml() + '<span class="greet">Ciao, <strong>' + escapeHtml(state.currentUser) + '</strong></span></button>' +
-        '<button data-action="open-delete-account-confirm" class="btn-ghost" title="Elimina account">' + icon("trash") + '</button>' +
-        '<button data-action="logout" class="btn-ghost">' + icon("logout") + " Esci</button></div></div>" +
-        '<div class="tab-nav">' + tabsHtml + "</div></header>" +
-      (state.message ? '<div class="message-wrap"><div class="banner ' + state.message.type + '">' +
+    return (state.message ? '<div class="message-wrap"><div class="banner ' + state.message.type + '">' +
         icon(state.message.type === "error" ? "alert-circle" : "check") + "<span>" + escapeHtml(state.message.text) + "</span></div></div>" : "") +
       '<main class="main"><div class="content">' + tabContent + "</div></main>" +
       (state.showAddItem ? renderAddItemModal() : "") +
@@ -2152,32 +2144,37 @@
   }
 
   /* ============ scroll della FINESTRA attraverso i render ============
-     Come per lo scroll interno della chat (vedi sotto), ogni render() ricostruisce tutto
-     #app da zero: senza questa conservazione, qualunque interazione (aprire un modale,
-     spuntare una checkbox, digitare in un campo, ecc.) mentre si e' scrollati piu' in basso
-     nella pagina - es. la lista Community, o gli scambi in "Scambi" - farebbe scattare la
-     pagina (e con essa la barra in alto, che essendo "sticky" resta comunque visibile in
-     cima) di nuovo in cima, dando l'impressione che "la barra si sposti" cliccandola.
+     Come per lo scroll interno della chat (vedi sotto), ogni render() ricostruisce il
+     "corpo" dell'app da zero (vedi #app-body-slot piu' sotto): senza questa conservazione,
+     qualunque interazione (aprire un modale, spuntare una checkbox, digitare in un campo,
+     ecc.) mentre si e' scrollati piu' in basso nella pagina - es. la lista Community, o gli
+     scambi in "Scambi" - farebbe scattare la pagina di nuovo in cima.
      Le VERE navigazioni (cambio tab, apertura di una chat o del profilo di un altro utente,
      ecc.) devono invece riportare la vista in cima: quelle chiamano requestScrollTop()
      prima di render(), cosi' sappiamo di dover resettare invece di conservare. */
   var pendingScrollTop = false;
   function requestScrollTop() { pendingScrollTop = true; }
 
+  /* ultimo HTML scritto nell'header (vedi render()): serve a capire se l'header e'
+     davvero cambiato prima di riscriverlo nel DOM. null forza la riscrittura al prossimo
+     render (usato quando lo slot dell'header non esiste ancora, es. subito dopo il boot). */
+  var lastHeaderHtml = null;
+
   function render() {
     if (state.booting) {
       document.getElementById("app").innerHTML = '<div class="auth-wrap"><div class="auth-box" style="text-align:center;">' + icon("loader", "spin-sm") + "</div></div>";
+      lastHeaderHtml = null;
       return;
     }
     var FOCUS_PRESERVE_IDS = ["friend-username", "community-search", "inventory-search", "other-inventory-search", "history-search", "chat-input", "new-group-name"];
     var active = document.activeElement;
     var keepFocusId = (active && FOCUS_PRESERVE_IDS.indexOf(active.id) !== -1) ? active.id : null;
     var selStart = keepFocusId ? active.selectionStart : null, selEnd = keepFocusId ? active.selectionEnd : null;
-    /* ogni render() ricostruisce l'intero #app da zero (innerHTML), quindi qualunque
-       elemento scrollabile perderebbe la propria posizione di scroll ad ogni singolo
-       aggiornamento di stato (es. aprire il modale "Scambio" in chat, o qualunque altra
-       azione), anche quando non c'entra nulla con quell'elemento. Salviamo qui le
-       posizioni prima della sostituzione e le ripristiniamo subito dopo. */
+    /* il "corpo" dell'app viene ricostruito da zero ad ogni render() (vedi piu' sotto),
+       quindi qualunque elemento scrollabile al suo interno perderebbe la propria posizione
+       di scroll ad ogni singolo aggiornamento di stato (es. aprire il modale "Scambio" in
+       chat, o qualunque altra azione), anche quando non c'entra nulla con quell'elemento.
+       Salviamo qui le posizioni prima della sostituzione e le ripristiniamo subito dopo. */
     var savedWindowScroll = window.scrollY || window.pageYOffset || document.documentElement.scrollTop || 0;
     var chatEl = document.getElementById("chat-messages");
     var chatScroll = null;
@@ -2185,7 +2182,31 @@
       var atBottom = (chatEl.scrollHeight - chatEl.scrollTop - chatEl.clientHeight) < 40;
       chatScroll = { top: chatEl.scrollTop, atBottom: atBottom };
     }
-    document.getElementById("app").innerHTML = renderOfflineBanner() + (state.currentUser ? renderApp() : renderAuth());
+
+    /* ============ header persistente ============
+       A differenza del corpo dell'app, l'header vive in un proprio nodo DOM fisso
+       (#app-header-slot) che non viene MAI distrutto solo perche' e' cambiato qualcos'altro:
+       lo riscriviamo solo quando il suo HTML e' davvero diverso da com'era (cambio tab,
+       avatar, nome utente, comparsa/scomparsa del pulsante "Installa", login/logout...).
+       Per tutti gli altri render (aprire un modale, spuntare una checkbox, digitare in un
+       campo, ecc.) l'header non viene toccato: niente da "recuperare" dopo, come invece
+       serve qui sotto per lo scroll della finestra e della chat. */
+    var appEl = document.getElementById("app");
+    var headerSlot = document.getElementById("app-header-slot");
+    var bodySlot = document.getElementById("app-body-slot");
+    if (!headerSlot || !bodySlot) {
+      appEl.innerHTML = '<div id="app-header-slot"></div><div id="app-body-slot"></div>';
+      headerSlot = document.getElementById("app-header-slot");
+      bodySlot = document.getElementById("app-body-slot");
+      lastHeaderHtml = null;
+    }
+    var newHeaderHtml = state.currentUser ? renderHeader() : "";
+    if (newHeaderHtml !== lastHeaderHtml) {
+      headerSlot.innerHTML = newHeaderHtml;
+      lastHeaderHtml = newHeaderHtml;
+    }
+    bodySlot.innerHTML = renderOfflineBanner() + (state.currentUser ? renderAppBody() : renderAuth());
+
     if (keepFocusId) {
       var el = document.getElementById(keepFocusId);
       if (el) { el.focus(); try { el.setSelectionRange(selStart, selEnd); } catch (err) {} }
@@ -2196,16 +2217,19 @@
     }
     if (pendingScrollTop) { window.scrollTo(0, 0); pendingScrollTop = false; }
     else if (savedWindowScroll) { window.scrollTo(0, savedWindowScroll); }
-    /* la barra delle tab (.tab-nav) scorre in orizzontale su schermi stretti: senza
-       questo, cliccare una tab la ricreava sempre scrollata all'inizio, "nascondendo"
-       la tab appena selezionata se non era la prima.
+    /* la barra delle tab (.tab-nav) scorre in orizzontale su schermi stretti: quando
+       l'header viene davvero riscritto (vedi sopra, es. per un cambio tab) va riportata a
+       inquadrare la tab appena selezionata, altrimenti resterebbe scrollata dov'era prima
+       nel vecchio elemento ormai sostituito (a schermo stretto rischiando di "nascondere"
+       la tab appena cliccata).
        Prima si usava activeTabBtn.scrollIntoView({block:"nearest", inline:"nearest"}):
        "block" riguarda pero' lo scroll VERTICALE, e siccome .app-header e' position:sticky
        il browser calcola la sua posizione "di flusso" (come se non fosse sticky) per capire
        se serve scrollare, e quella posizione risulta sempre in cima alla pagina. Il risultato
-       era che OGNI render() (non solo il cambio tab: anche aprire un modale sopra la chat,
-       es. "Scambio") faceva scattare la pagina/la chat in cima. Scrollando qui SOLO in
-       orizzontale il contenitore .tab-nav stesso, il resto della pagina non viene mai toccato. */
+       era che questo avrebbe fatto scattare la pagina/la chat in cima. Scrollando qui SOLO in
+       orizzontale il contenitore .tab-nav stesso, il resto della pagina non viene mai toccato.
+       Nei render che NON riscrivono l'header (la maggior parte) questo blocco e' di fatto un
+       no-op: l'elemento non e' stato ricreato, quindi la sua scrollLeft e' gia' quella giusta. */
     var activeTabBtn = document.querySelector(".tab-nav button.active");
     if (activeTabBtn) {
       var tabNavEl = activeTabBtn.parentElement;
@@ -2259,8 +2283,6 @@
     else if (action === "move-edit-photo-left") { swapPhotos(state.editItemPhotos, parseInt(t.dataset.index, 10), -1); }
     else if (action === "move-edit-photo-right") { swapPhotos(state.editItemPhotos, parseInt(t.dataset.index, 10), 1); }
     else if (action === "delete-item") { deleteItem(t.dataset.id); }
-    else if (action === "move-item-left") { moveInventoryItem(t.dataset.id, -1); }
-    else if (action === "move-item-right") { moveInventoryItem(t.dataset.id, 1); }
     else if (action === "set-profile-item") { setAsProfileItem(t.dataset.id); }
     else if (action === "open-user") { openUser(t.dataset.username); }
     else if (action === "back-to-community") { backToCommunity(); }
