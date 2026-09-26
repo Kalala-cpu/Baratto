@@ -519,6 +519,7 @@ input { font-family: inherit; }
   flex-wrap: wrap;
 }
 .page-header h2 { font-family: "Fraunces", Georgia, serif; font-size: 1.4rem; }
+.page-header-title { display: flex; align-items: center; gap: 0.6rem; }
 
 .section-title {
   font-size: 0.78rem;
