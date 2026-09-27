@@ -668,8 +668,24 @@ input { font-family: inherit; }
 }
 .item-profile-badge .icon { width: 0.65rem; height: 0.65rem; }
 
-/* pulsante per impostare un oggetto come immagine profilo (prima posizione) */
-.item-reorder { display: flex; justify-content: flex-start; gap: 0.4rem; margin-top: 0.5rem; }
+/* riordino di un oggetto (frecce su/giu') + azione rapida immagine profilo */
+.item-reorder { display: flex; align-items: center; justify-content: space-between; gap: 0.4rem; margin-top: 0.5rem; flex-wrap: wrap; }
+.item-move-group { display: flex; gap: 0.25rem; }
+.btn-move-arrow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  border: 1px solid var(--line);
+  background: var(--cream);
+  color: var(--ink-soft);
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+.btn-move-arrow .icon { width: 0.8rem; height: 0.8rem; }
+.btn-move-arrow:hover:not(:disabled) { border-color: var(--brass); color: var(--brass-dark); background: var(--brass-light); }
+.btn-move-arrow:disabled { opacity: 0.35; cursor: default; }
 .btn-move-item {
   display: flex;
   align-items: center;
@@ -965,7 +981,7 @@ input { font-family: inherit; }
   border: 1px solid var(--line);
   border-radius: var(--radius);
   padding: 1rem;
-  margin-bottom: 0.5rem;
+  margin-bottom: 1.1rem;
 }
 .friend-add .field { margin-bottom: 0; flex: 1; }
 
@@ -974,7 +990,7 @@ input { font-family: inherit; }
   background: var(--paper);
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
-  margin-bottom: 0.5rem;
+  margin-bottom: 1.1rem;
   overflow: hidden;
 }
 .friend-suggestion-row {
@@ -1250,8 +1266,21 @@ input { font-family: inherit; }
 }
 .chat-friend-card:hover { border-color: var(--brass); background: var(--cream); }
 .chat-friend-card.active { border-color: var(--brass); background: var(--brass-light); }
+.chat-friend-card.unread { border-color: var(--brass); }
+.chat-friend-card.unread .name { font-weight: 700; }
 .chat-friend-card > .icon { color: var(--brass); width: 1.1rem; height: 1.1rem; flex-shrink: 0; }
 .chat-sub { font-size: 0.72rem; color: var(--ink-soft); }
+
+/* puntino "non letto": sulle singole chat e sul tab Chat della barra in alto */
+.unread-dot {
+  display: inline-block;
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 999px;
+  background: var(--brass-dark, #b5792f);
+  flex-shrink: 0;
+}
+.unread-dot-tab { position: relative; top: -0.5rem; margin-left: 0.15rem; }
 
 .chat-avatar {
   width: 2.1rem;
@@ -1347,6 +1376,17 @@ input { font-family: inherit; }
   flex-direction: column;
   gap: 0.5rem;
 }
+.chat-load-older {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  font-size: 0.75rem;
+  color: var(--ink-soft);
+  padding: 0.4rem 0;
+  flex-shrink: 0;
+}
+.chat-load-older-hint { opacity: 0.65; }
 .chat-bubble-row { display: flex; justify-content: flex-start; }
 .chat-bubble-row.own { justify-content: flex-end; }
 .chat-bubble {
@@ -1435,18 +1475,35 @@ input { font-family: inherit; }
   flex-wrap: wrap;
 }
 .chat-pending-preview {
-  width: 2.6rem;
-  height: 2.6rem;
   border-radius: var(--radius-sm);
   overflow: hidden;
   flex-shrink: 0;
   background: var(--brass-light);
 }
 .chat-pending-preview img, .chat-pending-preview video {
-  width: 100%; height: 100%; object-fit: cover; display: block;
+  width: 2.6rem; height: 2.6rem; object-fit: cover; display: block;
 }
+.chat-pending-preview audio { width: 180px; max-width: 55vw; height: 2.2rem; display: block; }
 .chat-pending-label { font-size: 0.82rem; color: var(--ink-soft); flex: 1; min-width: 120px; }
 .chat-pending-actions { display: flex; gap: 0.4rem; flex-shrink: 0; }
+
+/* indicatore di registrazione vocale in corso, sopra al form della chat */
+.chat-voice-recording { background: var(--red-bg); }
+.chat-recording-dot {
+  width: 0.65rem;
+  height: 0.65rem;
+  border-radius: 999px;
+  background: var(--red);
+  flex-shrink: 0;
+  animation: chat-recording-pulse 1s ease-in-out infinite;
+}
+@keyframes chat-recording-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+/* bolla messaggio vocale ricevuto/inviato */
+.chat-bubble-audio { display: flex; align-items: center; gap: 0.5rem; }
+.chat-bubble-audio > .icon { width: 1rem; height: 1rem; color: var(--brass-dark); flex-shrink: 0; }
+.chat-bubble-audio audio { max-width: 230px; width: 100%; height: 2.2rem; }
+.chat-audio-duration { font-size: 0.72rem; color: var(--ink-soft); flex-shrink: 0; }
 
 .chat-form {
   display: flex;
@@ -1483,7 +1540,7 @@ input { font-family: inherit; }
   cursor: pointer;
 }
 .chat-form .btn-icon:hover { background: var(--brass-dark); border-color: var(--brass-dark); }
-.chat-attach-btn { background: var(--cream); color: var(--brass-dark); border: 1.5px solid var(--line); }
+.chat-attach-btn { background: var(--cream); color: var(--brass-dark); border: 1.5px solid var(--line); padding: 0; font-family: inherit; }
 .chat-attach-btn:hover { border-color: var(--brass); }
 .chat-attach-btn .icon { width: 1.1rem; height: 1.1rem; }
 

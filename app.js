@@ -481,19 +481,30 @@
       render();
     });
   }
-  /* carica solo gli scambi che coinvolgono l'utente corrente (come mittente o destinatario):
-     senza questo filtro la tab Scambi mostrava le proposte di TUTTI gli utenti, e chiunque
-     poteva finire per accettare/rifiutare scambi non propri */
+  /* carica solo gli scambi che coinvolgono l'utente corrente (come mittente o destinatario).
+     Prima si scaricava l'INTERA tabella "trades" (di tutti gli utenti) e si filtrava lato
+     client: oltre a essere superfluo, con tanti scambi nel sistema diventa pesante da
+     scaricare ogni volta. Ora si usano query lato server (equalTo) che restituiscono solo
+     gli scambi che coinvolgono davvero l'utente corrente. Le query sono 4 (non 2) per
+     compatibilita' con scambi vecchi salvati con i campi "from"/"to" invece di
+     "fromUser"/"toUser" (vedi il resto del codice, che gestisce gia' entrambi i casi). */
   function loadTrades() {
-    dbGet("trades").then(function (trades) {
-      var all = toArray(trades).filter(function (t) {
-        var fromU = t.fromUser || t.from || "";
-        var toU = t.toUser || t.to || "";
-        return sameUser(fromU, state.currentUser) || sameUser(toU, state.currentUser);
+    var uname = state.currentUser;
+    Promise.all([
+      fbDb.ref("trades").orderByChild("fromUser").equalTo(uname).once("value"),
+      fbDb.ref("trades").orderByChild("toUser").equalTo(uname).once("value"),
+      fbDb.ref("trades").orderByChild("from").equalTo(uname).once("value"),
+      fbDb.ref("trades").orderByChild("to").equalTo(uname).once("value")
+    ]).then(function (snaps) {
+      var seen = {}, all = [];
+      snaps.forEach(function (snap) {
+        toArray(snap.val()).forEach(function (t) {
+          if (t && t.id && !seen[t.id]) { seen[t.id] = true; all.push(t); }
+        });
       });
       setState({ allTrades: all, history: all });
       updateHistory();
-    });
+    }).catch(function (err) { setMessage(dbErrorMessage(err, "Errore scambi: " + err.message), "error"); });
   }
   /* carica sia gli amici confermati (users/{u}/friends) sia le richieste pendenti
      (friendRequests), in entrata e in uscita, cosi' la tab Amici puo' mostrarle tutte */
@@ -514,6 +525,7 @@
       }).map(function (r) { return { id: r.id, username: r.toUser || r.to, status: "outgoing" }; });
       setState({ friends: accepted.concat(incoming, outgoing) });
       render();
+      attachUnreadWatchers();
     });
   }
   /* carica i gruppi di cui l'utente corrente e' membro */
@@ -525,6 +537,7 @@
       list.sort(function (a, b) { return (b.created || 0) - (a.created || 0); });
       setState({ groups: list });
       render();
+      attachUnreadWatchers();
     });
   }
   /* controparte (l'altro utente coinvolto) di uno scambio rispetto all'utente corrente */
@@ -616,6 +629,7 @@
   function handleLogout() {
     detachChat();
     detachTradesLiveWatch();
+    detachUnreadWatchers();
     fbAuth.signOut().then(function () {
       setHash("");
       setState({
@@ -866,9 +880,19 @@
   function openFriend(username) { openUser(username); setState({ tab: "community" }); render(); }
 
   /* ============ chat (privata e di gruppo) ============ */
-  var chatRef = null; /* riferimento Firebase attivo, per poterlo staccare (off) quando si cambia chat */
+  var chatRef = null; /* riferimento Firebase attivo (finestra recente), per poterlo staccare (off) quando si cambia chat */
   var MAX_CHAT_MEDIA_DIM = 640;
   var MAX_CHAT_MESSAGE_LEN = 500; /* limite caratteri per messaggio di testo, riflesso anche nelle regole del DB */
+  /* Paginazione chat: invece di scaricare (e tenere in ascolto live) TUTTA la cronologia
+     di una chat ogni volta che la si apre, cosa pesante se contiene molte foto/video in
+     base64, teniamo in ascolto live solo gli ultimi CHAT_PAGE messaggi (chatLiveMessages) e
+     carichiamo i messaggi piu' vecchi a blocchi, una tantum (chatOlderMessages), quando
+     l'utente scorre verso l'alto. I due array vengono uniti in state.chatMessages per il
+     render, cosi' il resto del codice (che legge/scrive state.chatMessages) non cambia. */
+  var chatLiveMessages = [];
+  var chatOlderMessages = [];
+  var chatHasMoreOlder = false;
+  var chatLoadingOlder = false;
   /* id univoco e stabile per la coppia di utenti, indipendente da chi apre la chat per primo */
   function chatIdFor(u1, u2) {
     return [String(u1 || "").toLowerCase(), String(u2 || "").toLowerCase()].sort().join("__");
@@ -879,8 +903,20 @@
     if (state.chatTarget.type === "group") return "groupChats/" + state.chatTarget.id + "/messages";
     return "chats/" + chatIdFor(state.currentUser, state.chatTarget.id) + "/messages";
   }
+  function rebuildChatMessages() {
+    var seen = {}, merged = [];
+    chatOlderMessages.concat(chatLiveMessages).forEach(function (m) {
+      if (m && m.id && !seen[m.id]) { seen[m.id] = true; merged.push(m); }
+    });
+    merged.sort(function (a, b) { return (a.created || 0) - (b.created || 0); });
+    state.chatMessages = merged;
+  }
   function detachChat() {
     if (chatRef) { chatRef.off("value"); chatRef = null; }
+    chatLiveMessages = [];
+    chatOlderMessages = [];
+    chatHasMoreOlder = false;
+    chatLoadingOlder = false;
   }
   /* scarta un eventuale allegato in attesa di conferma: va chiamata ogni volta che
      cambia la chat attiva, altrimenti una foto/video scelto per una conversazione
@@ -888,18 +924,52 @@
   function clearPendingChatMedia() {
     if (state.pendingChatMedia && state.pendingChatMedia.previewUrl) { URL.revokeObjectURL(state.pendingChatMedia.previewUrl); }
     state.pendingChatMedia = null;
+    if (state.voiceRecording || voiceMediaRecorder) { stopVoiceRecording(false); }
   }
   function attachChatRef() {
     var path = chatMessagesPath();
     if (!path) return;
-    chatRef = fbDb.ref(path);
+    chatLiveMessages = [];
+    chatOlderMessages = [];
+    chatHasMoreOlder = true; /* non sappiamo ancora se ce ne sono altri: lo scopriamo al primo "carica precedenti" */
+    chatLoadingOlder = false;
+    /* finestra live: sempre gli ultimi CHAT_PAGE messaggi, aggiornata in automatico */
+    chatRef = fbDb.ref(path).orderByChild("created").limitToLast(CHAT_PAGE);
     chatRef.on("value", function (snap) {
-      var msgs = toArray(snap.val()).sort(function (a, b) { return (a.created || 0) - (b.created || 0); });
-      setState({ chatMessages: msgs });
+      chatLiveMessages = toArray(snap.val());
+      rebuildChatMessages();
+      setState({ chatHasMoreOlder: chatHasMoreOlder });
       render();
       scrollChatToBottom();
     }, function (err) {
       setMessage(dbErrorMessage(err, "Errore chat: " + err.message), "error");
+    });
+  }
+  /* carica un altro blocco di messaggi piu' vecchi di quelli gia' mostrati (invocata
+     scorrendo verso l'alto nel thread, vedi il listener "scroll" piu' in basso) */
+  function loadOlderChatMessages() {
+    var path = chatMessagesPath();
+    if (!path || chatLoadingOlder || !chatHasMoreOlder || !state.chatMessages.length) return;
+    var oldest = state.chatMessages[0];
+    chatLoadingOlder = true;
+    setState({ chatLoadingOlder: true });
+    render();
+    fbDb.ref(path).orderByChild("created").endBefore(oldest.created || 0, oldest.id).limitToLast(CHAT_PAGE).once("value").then(function (snap) {
+      var older = toArray(snap.val());
+      chatHasMoreOlder = older.length === CHAT_PAGE;
+      var container = document.getElementById("chat-messages");
+      var prevHeight = container ? container.scrollHeight : 0;
+      chatOlderMessages = older.concat(chatOlderMessages);
+      rebuildChatMessages();
+      chatLoadingOlder = false;
+      setState({ chatHasMoreOlder: chatHasMoreOlder, chatLoadingOlder: false });
+      render();
+      if (container) { container.scrollTop = container.scrollHeight - prevHeight; }
+    }).catch(function (err) {
+      chatLoadingOlder = false;
+      setState({ chatLoadingOlder: false });
+      setMessage(dbErrorMessage(err, "Errore: " + err.message), "error");
+      render();
     });
   }
   function openChat(username) {
@@ -907,6 +977,7 @@
     detachChat();
     clearPendingChatMedia();
     setState({ tab: "chat", chatTarget: { type: "friend", id: username, name: username }, chatMessages: [], chatInput: "", chatOtherInventory: [], showChatTradeBuilder: false });
+    markChatRead(chatKeyForFriend(username));
     render();
     attachChatRef();
     setHash("chat/" + encodeURIComponent(username));
@@ -917,11 +988,84 @@
     detachChat();
     clearPendingChatMedia();
     setState({ tab: "chat", chatTarget: { type: "group", id: group.id, name: group.name, members: toArray(group.members) }, chatMessages: [], chatInput: "", showChatTradeBuilder: false });
+    markChatRead(chatKeyForGroup(group.id));
     render();
     attachChatRef();
     setHash("chat");
   }
-  function closeChat() { detachChat(); clearPendingChatMedia(); setState({ chatTarget: null, chatMessages: [], chatInput: "", showChatTradeBuilder: false }); render(); setHash("chat"); }
+  function closeChat() {
+    if (state.chatTarget) {
+      /* segna come letta la chat che si sta chiudendo, cosi' i messaggi visti restando
+         nella conversazione non ricompaiono come "non letti" nella lista chat */
+      markChatRead(state.chatTarget.type === "group" ? chatKeyForGroup(state.chatTarget.id) : chatKeyForFriend(state.chatTarget.id));
+    }
+    detachChat(); clearPendingChatMedia(); setState({ chatTarget: null, chatMessages: [], chatInput: "", showChatTradeBuilder: false }); render(); setHash("chat");
+  }
+
+  /* ============ indicatore "non letto" per le chat ============
+     Per ogni amico/gruppo teniamo un piccolo ascolto live (solo sull'ULTIMO messaggio,
+     non su tutta la cronologia: leggero) per sapere quando e' arrivato l'ultimo messaggio.
+     "Letto fino a quando" e' salvato solo sul dispositivo (localStorage), non nel database:
+     non serve sincronizzarlo fra dispositivi diversi per far comparire un puntino. */
+  var CHAT_READ_STORAGE_KEY = "barattoChatLastRead";
+  var chatLastMsgTs = {};     /* chatKey -> timestamp dell'ultimo messaggio conosciuto */
+  var chatUnreadWatchers = {}; /* chatKey -> { ref, handler } */
+  function chatKeyForFriend(username) { return "f:" + String(username || "").toLowerCase(); }
+  function chatKeyForGroup(groupId) { return "g:" + groupId; }
+  function readChatReadMap() {
+    try { return JSON.parse(localStorage.getItem(CHAT_READ_STORAGE_KEY) || "{}") || {}; } catch (e) { return {}; }
+  }
+  function markChatRead(key) {
+    try {
+      var map = readChatReadMap();
+      map[key] = Date.now();
+      localStorage.setItem(CHAT_READ_STORAGE_KEY, JSON.stringify(map));
+    } catch (e) { /* localStorage non disponibile (es. modalita' privata): niente badge, non e' un errore bloccante */ }
+  }
+  /* una chat aperta in questo momento e' sempre considerata "letta", anche se nel
+     frattempo arrivasse un messaggio nuovo mentre la si sta guardando */
+  function isCurrentChat(key) {
+    if (!state.chatTarget) return false;
+    return key === (state.chatTarget.type === "group" ? chatKeyForGroup(state.chatTarget.id) : chatKeyForFriend(state.chatTarget.id));
+  }
+  function isChatUnread(key) {
+    if (isCurrentChat(key)) return false;
+    var lastMsg = chatLastMsgTs[key];
+    if (!lastMsg) return false;
+    var lastRead = readChatReadMap()[key] || 0;
+    return lastMsg > lastRead;
+  }
+  function hasAnyUnreadChat() {
+    return Object.keys(chatLastMsgTs).some(isChatUnread);
+  }
+  function detachUnreadWatchers() {
+    Object.keys(chatUnreadWatchers).forEach(function (k) {
+      chatUnreadWatchers[k].ref.off("value", chatUnreadWatchers[k].handler);
+    });
+    chatUnreadWatchers = {};
+  }
+  /* ri-registra tutti gli ascolti "ultimo messaggio" in base ai amici/gruppi correnti:
+     va richiamata ogni volta che cambia la lista amici o gruppi (aggiunte/rimozioni) */
+  function attachUnreadWatchers() {
+    detachUnreadWatchers();
+    var entries = [];
+    (state.friends || []).filter(function (f) { return f && f.status === "accepted"; }).forEach(function (f) {
+      entries.push({ key: chatKeyForFriend(f.username), path: "chats/" + chatIdFor(state.currentUser, f.username) + "/messages" });
+    });
+    (state.groups || []).forEach(function (g) {
+      entries.push({ key: chatKeyForGroup(g.id), path: "groupChats/" + g.id + "/messages" });
+    });
+    entries.forEach(function (entry) {
+      var ref = fbDb.ref(entry.path).orderByChild("created").limitToLast(1);
+      var handler = function (snap) {
+        var arr = toArray(snap.val());
+        chatLastMsgTs[entry.key] = arr.length ? (arr[0].created || 0) : 0;
+        render();
+      };
+      ref.on("value", handler);
+      chatUnreadWatchers[entry.key] = { ref: ref, handler: handler };
+    });
+  }
   function scrollChatToBottom() {
     setTimeout(function () {
       var el = document.getElementById("chat-messages");
@@ -974,6 +1118,64 @@
     setState({ pendingChatMedia: null });
     render();
   }
+
+  /* ============ messaggi vocali ============
+     Registrazione con l'API MediaRecorder del browser. Il file audio risultante viene
+     trattato esattamente come una foto/video: prima un'anteprima da confermare
+     (state.pendingChatMedia con type "audio"), poi l'invio vero in confirmSendChatMedia,
+     come base64 dentro il messaggio (stesso meccanismo gia' usato per foto e video). */
+  var voiceMediaRecorder = null;
+  var voiceRecordedChunks = [];
+  var voiceRecordStartTs = 0;
+  var voiceRecordTimer = null;
+  function startVoiceRecording() {
+    if (state.pendingChatMedia || state.voiceRecording || voiceMediaRecorder) return;
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.MediaRecorder) {
+      setMessage("Il tuo browser non supporta la registrazione audio.", "error");
+      return;
+    }
+    navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
+      voiceRecordedChunks = [];
+      var mimeType = (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported("audio/webm")) ? "audio/webm" : "";
+      try { voiceMediaRecorder = mimeType ? new MediaRecorder(stream, { mimeType: mimeType }) : new MediaRecorder(stream); }
+      catch (e) { setMessage("Impossibile avviare la registrazione.", "error"); stream.getTracks().forEach(function (t) { t.stop(); }); return; }
+      voiceMediaRecorder.ondataavailable = function (ev) { if (ev.data && ev.data.size) voiceRecordedChunks.push(ev.data); };
+      voiceMediaRecorder.onstop = function () { stream.getTracks().forEach(function (t) { t.stop(); }); };
+      voiceMediaRecorder.start();
+      voiceRecordStartTs = Date.now();
+      setState({ voiceRecording: { seconds: 0 } });
+      render();
+      voiceRecordTimer = setInterval(function () {
+        if (!state.voiceRecording) return;
+        var secs = Math.floor((Date.now() - voiceRecordStartTs) / 1000);
+        state.voiceRecording = { seconds: secs };
+        render();
+        if (secs >= MAX_VOICE_SECONDS) { stopVoiceRecording(true); }
+      }, 500);
+    }).catch(function () {
+      setMessage("Permesso al microfono negato o microfono non disponibile.", "error");
+    });
+  }
+  /* keep: true -> ferma e prepara l'anteprima pronta per l'invio; keep: false -> annulla tutto */
+  function stopVoiceRecording(keep) {
+    if (!voiceMediaRecorder) return;
+    clearInterval(voiceRecordTimer);
+    voiceRecordTimer = null;
+    var rec = voiceMediaRecorder;
+    var startTs = voiceRecordStartTs;
+    voiceMediaRecorder = null;
+    setState({ voiceRecording: null });
+    rec.addEventListener("stop", function onStop() {
+      rec.removeEventListener("stop", onStop);
+      if (!keep || !voiceRecordedChunks.length) { render(); return; }
+      var blob = new Blob(voiceRecordedChunks, { type: rec.mimeType || "audio/webm" });
+      var duration = Math.max(1, Math.round((Date.now() - startTs) / 1000));
+      var previewUrl = URL.createObjectURL(blob);
+      setState({ pendingChatMedia: { file: blob, previewUrl: previewUrl, type: "audio", duration: duration } });
+      render();
+    });
+    try { rec.stop(); } catch (e) { render(); }
+  }
   /* invio effettivo dell'allegato: parte quando l'utente preme il tasto di invio
      principale della chat (vedi sendChatMessage). followUpText e' l'eventuale testo
      scritto insieme alla foto/video: viene inviato come messaggio a parte subito dopo,
@@ -1005,6 +1207,14 @@
       };
       reader.onerror = function () { setMessage("Impossibile leggere il video.", "error"); finish(); };
       reader.readAsDataURL(file);
+    } else if (pending.type === "audio") {
+      var audioReader = new FileReader();
+      audioReader.onload = function (ev) {
+        var msg = { id: msgId, from: state.currentUser, type: "audio", url: ev.target.result, duration: pending.duration || 0, created: Date.now() };
+        dbSet(path + "/" + msgId, msg).catch(function (err) { setMessage(dbErrorMessage(err, "Errore invio: " + err.message), "error"); }).then(finish, finish);
+      };
+      audioReader.onerror = function () { setMessage("Impossibile leggere l'audio.", "error"); finish(); };
+      audioReader.readAsDataURL(file);
     } else {
       resizeImageFile(file, MAX_CHAT_MEDIA_DIM, 0.65).then(function (blob) {
         var reader = new FileReader();
@@ -1029,27 +1239,26 @@
     var mm = d.getMinutes().toString().padStart(2, "0");
     return hh + ":" + mm;
   }
+  /* mm:ss per la durata di un messaggio vocale (registrazione in corso o gia' inviato) */
+  function formatRecordingTime(totalSeconds) {
+    var s = Math.max(0, Math.floor(totalSeconds || 0));
+    var mm = Math.floor(s / 60), ss = s % 60;
+    return mm + ":" + String(ss).padStart(2, "0");
+  }
   var ITEM_DATE_MONTHS = ["gen", "feb", "mar", "apr", "mag", "giu", "lug", "ago", "set", "ott", "nov", "dic"];
   function formatItemDate(ts) {
     if (!ts) return "";
     var d = new Date(ts);
     return d.getDate() + " " + ITEM_DATE_MONTHS[d.getMonth()] + " " + d.getFullYear();
   }
-  /* date di una card della propria collezione: 'acquired' e' da quando l'oggetto e'
-     entrato nella collezione attuale (all'aggiunta, o al momento di uno scambio che lo
-     ha fatto cambiare proprietario); 'created' e' da quando esiste in origine nell'app e
-     non cambia mai. Per gli oggetti mai scambiati le due coincidono: mostriamo la
-     seconda riga solo quando sono diverse, per non ripetere la stessa data due volte.
-     Fallback su 'created' se 'acquired' manca (oggetti salvati prima di questa modifica). */
+  /* data mostrata sulle card di un inventario (il mio o quello di un altro utente):
+     solo la data di aggiunta all'app ("created", non cambia mai nel tempo, anche dopo
+     eventuali scambi che cambiano proprietario dell'oggetto). Fallback su 'acquired' per
+     eventuali oggetti salvati prima che esistesse il campo 'created'. */
   function renderItemDatesHtml(item) {
-    var addedTs = item.acquired || item.created;
-    var originTs = item.created;
-    if (!addedTs && !originTs) return "";
-    var html = '<div class="item-dates">';
-    if (addedTs) html += '<div class="item-date">' + icon("calendar") + ' Nella tua collezione dal ' + formatItemDate(addedTs) + '</div>';
-    if (originTs && originTs !== addedTs) html += '<div class="item-date item-date-origin">' + icon("clock") + ' Nell\'app dal ' + formatItemDate(originTs) + '</div>';
-    html += '</div>';
-    return html;
+    var ts = item.created || item.acquired;
+    if (!ts) return "";
+    return '<div class="item-dates"><div class="item-date">' + icon("calendar") + ' Aggiunto il ' + formatItemDate(ts) + '</div></div>';
   }
 
   /* ============ gruppi ============ */
@@ -1725,8 +1934,8 @@
     }
     if (isOwn) {
       html += '<label class="avail-toggle"><input type="checkbox" data-id="' + escapeHtml(item.id) + '" ' + (av ? "checked" : "") + '><span>' + (av ? "Disponibile" : "Non disponibile") + '</span></label>';
-      html += renderItemDatesHtml(item);
     }
+    html += renderItemDatesHtml(item);
     html += '</div></div>';
     return html;
   }
@@ -1833,7 +2042,7 @@
         return '<div class="item-card ' + (sel ? "selected" : "") + '"><div class="item-select" data-action="toggle-want" data-id="' + escapeHtml(item.id) + '">' +
           (photos.length ? '<div class="item-photo">' + thumbHtml + '</div>' : '<div class="item-photo-empty">' + icon("package") + '</div>') +
           '<div class="select-check">' + icon("check") + '</div>' +
-          '</div><div class="item-info"><h3>' + escapeHtml(item.name) + '</h3></div></div>';
+          '</div><div class="item-info"><h3>' + escapeHtml(item.name) + '</h3>' + renderItemDatesHtml(item) + '</div></div>';
       }).join("") + '</div>';
       if (filteredOther.length === 0) { html += '<div class="empty-state"><p>Nessun risultato.</p></div>'; }
       else if (filteredOther.length > otherLimit) { html += '<div class="load-more"><button type="button" data-action="other-inventory-more" class="btn-ghost">Carica altri...</button></div>'; }
@@ -1914,17 +2123,19 @@
     if (filteredGroups.length) {
       html += '<div class="chat-list-section-title">Gruppi</div>' + filteredGroups.map(function (g) {
         var active = state.chatTarget && state.chatTarget.type === "group" && state.chatTarget.id === g.id;
-        return '<div class="chat-friend-card ' + (active ? "active" : "") + '" data-action="open-group-chat" data-id="' + escapeHtml(g.id) + '">' +
+        var unread = isChatUnread(chatKeyForGroup(g.id));
+        return '<div class="chat-friend-card ' + (active ? "active" : "") + (unread ? " unread" : "") + '" data-action="open-group-chat" data-id="' + escapeHtml(g.id) + '">' +
           '<div class="who">' + groupAvatarHtml(g.members) + '<div><div class="name">' + escapeHtml(g.name || "") + '</div><div class="chat-sub">' + toArray(g.members).length + ' membri</div></div></div>' +
-          icon("message") + '</div>';
+          (unread ? '<span class="unread-dot" title="Nuovi messaggi"></span>' : icon("message")) + '</div>';
       }).join("");
     }
     if (filteredFriends.length) {
       html += '<div class="chat-list-section-title">Amici</div>' + filteredFriends.map(function (f) {
         var active = state.chatTarget && state.chatTarget.type === "friend" && sameUser(state.chatTarget.id, f.username);
-        return '<div class="chat-friend-card ' + (active ? "active" : "") + '" data-action="open-chat" data-username="' + escapeHtml(f.username || "") + '">' +
+        var unread = isChatUnread(chatKeyForFriend(f.username));
+        return '<div class="chat-friend-card ' + (active ? "active" : "") + (unread ? " unread" : "") + '" data-action="open-chat" data-username="' + escapeHtml(f.username || "") + '">' +
           '<div class="who">' + userAvatarHtml(f.username || "") + '<div><div class="name">' + escapeHtml(f.username || "") + '</div></div></div>' +
-          icon("message") + '</div>';
+          (unread ? '<span class="unread-dot" title="Nuovi messaggi"></span>' : icon("message")) + '</div>';
       }).join("");
     }
     html += '</div>';
@@ -1942,6 +2153,9 @@
     }
     if (type === "video") {
       return '<div class="chat-bubble-media" data-action="view-chat-media" data-id="' + escapeHtml(m.id) + '"><video src="' + escapeHtml(m.url) + '" muted playsinline preload="metadata"></video><div class="chat-bubble-play">' + icon("video") + '</div></div>';
+    }
+    if (type === "audio") {
+      return '<div class="chat-bubble-audio">' + icon("mic") + '<audio controls preload="metadata" src="' + escapeHtml(m.url) + '"></audio>' + (m.duration ? '<span class="chat-audio-duration">' + formatRecordingTime(m.duration) + '</span>' : '') + '</div>';
     }
     if (type === "trade") {
       var trade = (state.allTrades || []).filter(function (t) { return t.id === m.tradeId; })[0];
@@ -1990,18 +2204,20 @@
       (!isGroup ? '<button type="button" data-action="open-chat-trade" class="btn-ghost btn-sm" title="Proponi scambio">' + icon("swap") + ' Scambio</button>' : '<button type="button" data-action="leave-group" data-id="' + escapeHtml(target.id) + '" class="btn-ghost btn-sm" title="Esci dal gruppo">' + icon("x") + ' Esci</button>') +
       '</div></div>';
     html += '<div class="chat-messages" id="chat-messages">';
+    if (state.chatLoadingOlder) { html += '<div class="chat-load-older">' + icon("loader", "spin-tiny") + ' Carico messaggi precedenti...</div>'; }
+    else if (state.chatHasMoreOlder && state.chatMessages.length) { html += '<div class="chat-load-older chat-load-older-hint">Scorri in su per caricare i messaggi precedenti</div>'; }
     if (!state.chatMessages.length) {
       html += '<div class="empty-state"><p>Nessun messaggio ancora. Scrivi il primo!</p></div>';
     } else {
       html += state.chatMessages.map(function (m) {
-        /* i messaggi di sistema (esito di uno scambio) sono centrati e senza mittente/orario,
-           per distinguerli chiaramente dai normali messaggi di testo */
+        /* i messaggi di sistema (esito di uno scambio, o l'uscita di qualcuno dal gruppo)
+           sono centrati e senza mittente/orario, per distinguerli dai messaggi normali */
         if (m.type === "system") { return '<div class="chat-system-row">' + renderChatMessageContent(m) + '</div>'; }
         var own = sameUser(m.from, state.currentUser);
         var showSender = isGroup && !own;
         return '<div class="chat-bubble-row ' + (own ? "own" : "") + (showSender ? " has-avatar" : "") + '">' +
           (showSender ? userAvatarHtml(m.from, "chat-bubble-avatar") : '') +
-          '<div class="chat-bubble ' + ((m.type === "image" || m.type === "video") ? "chat-bubble-has-media" : "") + '">' +
+          '<div class="chat-bubble ' + ((m.type === "image" || m.type === "video" || m.type === "audio") ? "chat-bubble-has-media" : "") + '">' +
           (showSender ? '<div class="chat-bubble-sender clickable" data-action="open-user" data-username="' + escapeHtml(m.from) + '" title="Vai all\'inventario di ' + escapeHtml(m.from) + '">' + escapeHtml(m.from) + '</div>' : '') +
           renderChatMessageContent(m) +
           '<div class="chat-bubble-time">' + formatChatTime(m.created) + '</div>' +
@@ -2009,15 +2225,25 @@
       }).join("");
     }
     html += '</div>';
-    if (state.pendingChatMedia) {
+    if (state.voiceRecording) {
+      html += '<div class="chat-pending-media chat-voice-recording">' +
+        '<span class="chat-recording-dot"></span>' +
+        '<span class="chat-pending-label">Registrazione... ' + formatRecordingTime(state.voiceRecording.seconds) + '</span>' +
+        '<div class="chat-pending-actions">' +
+        '<button type="button" data-action="cancel-voice-recording" class="btn-ghost btn-sm">' + icon("x") + ' Annulla</button>' +
+        '<button type="button" data-action="stop-voice-recording" class="btn-primary btn-sm">' + icon("check") + ' Ferma</button>' +
+        '</div></div>';
+    } else if (state.pendingChatMedia) {
       var pm = state.pendingChatMedia;
       html += '<div class="chat-pending-media">' +
         '<div class="chat-pending-preview">' +
         (pm.type === "video"
           ? '<video src="' + escapeHtml(pm.previewUrl) + '" muted playsinline preload="metadata"></video>'
+          : pm.type === "audio"
+          ? '<audio controls preload="metadata" src="' + escapeHtml(pm.previewUrl) + '"></audio>'
           : '<img src="' + escapeHtml(pm.previewUrl) + '" alt=""/>') +
         '</div>' +
-        '<span class="chat-pending-label">' + (pm.type === "video" ? "Video pronto: premi invio per spedirlo" : "Foto pronta: premi invio per spedirla") + '</span>' +
+        '<span class="chat-pending-label">' + (pm.type === "video" ? "Video pronto: premi invio per spedirlo" : pm.type === "audio" ? "Audio pronto: premi invio per spedirlo" : "Foto pronta: premi invio per spedirla") + '</span>' +
         '<div class="chat-pending-actions">' +
         '<button type="button" data-action="cancel-chat-media" class="btn-ghost btn-sm">' + icon("x") + ' Annulla</button>' +
         '</div></div>';
@@ -2027,6 +2253,7 @@
     var chatLen = (state.chatInput || "").length;
     html += '<form id="chat-form" class="chat-form">' +
       '<label class="chat-attach-btn" title="Invia foto o video"><input type="file" id="chat-media-input" accept="image/*,video/*" style="display:none"/>' + icon("paperclip") + '</label>' +
+      '<button type="button" data-action="start-voice-recording" class="chat-attach-btn" title="Registra messaggio vocale">' + icon("mic") + '</button>' +
       '<input id="chat-input" type="text" autocomplete="off" maxlength="' + MAX_CHAT_MESSAGE_LEN + '" placeholder="' + (state.pendingChatMedia ? "Didascalia (opzionale)..." : "Scrivi un messaggio...") + '" value="' + escapeHtml(state.chatInput) + '"/>' +
       (chatLen > MAX_CHAT_MESSAGE_LEN - 80 ? '<span class="chat-char-count' + (chatLen >= MAX_CHAT_MESSAGE_LEN ? " limit" : "") + '">' + chatLen + '/' + MAX_CHAT_MESSAGE_LEN + '</span>' : '') +
       '<button type="submit" class="btn-icon" title="Invia">' + icon("send") + '</button></form>';
@@ -2215,7 +2442,7 @@
     var tabsHtml = '<button type="button" data-action="switch-tab" data-tab="inventory" class="' + (state.tab === "inventory" ? "active" : "") + '">' + icon("package") + ' Inventario</button>' +
       '<button type="button" data-action="switch-tab" data-tab="community" class="' + (state.tab === "community" ? "active" : "") + '">' + icon("users") + ' Community</button>' +
       '<button type="button" data-action="switch-tab" data-tab="friends" class="' + (state.tab === "friends" ? "active" : "") + '">' + icon("user-plus") + ' Amici</button>' +
-      '<button type="button" data-action="switch-tab" data-tab="chat" class="' + (state.tab === "chat" ? "active" : "") + '">' + icon("message") + ' Chat</button>' +
+      '<button type="button" data-action="switch-tab" data-tab="chat" class="' + (state.tab === "chat" ? "active" : "") + '">' + icon("message") + ' Chat' + (hasAnyUnreadChat() ? '<span class="unread-dot unread-dot-tab" title="Nuovi messaggi"></span>' : "") + '</button>' +
       '<button type="button" data-action="switch-tab" data-tab="trades" class="' + (state.tab === "trades" ? "active" : "") + '">' + icon("swap") + ' Scambi</button>';
     return '<header class="app-header"><div class="row"><span class="wordmark display">Baratto</span>' +
         '<div class="header-right">' +
@@ -2456,6 +2683,9 @@
     else if (action === "submit-chat-trade") { submitChatTrade(); }
     else if (action === "view-chat-media") { viewChatMedia(t.dataset.id); }
     else if (action === "cancel-chat-media") { cancelChatMedia(); }
+    else if (action === "start-voice-recording") { startVoiceRecording(); }
+    else if (action === "stop-voice-recording") { stopVoiceRecording(true); }
+    else if (action === "cancel-voice-recording") { stopVoiceRecording(false); }
     else if (action === "go-profile") { goToOwnInventory(); }
     else if (action === "install-app") { promptInstall(); }
     else if (action === "open-trade-builder") { state.showTradeBuilder = true; state.tradeDuration = ""; render(); }
@@ -2518,6 +2748,49 @@
     else if (e.key === "ArrowLeft") lightboxStep(-1);
     else if (e.key === "ArrowRight") lightboxStep(1);
   });
+
+  /* ============ scroll verso l'alto nella chat: carica messaggi precedenti ============
+     "scroll" non risale (bubble) nel DOM, quindi va intercettato in fase di cattura per
+     poterlo delegare da document invece di doverlo ri-agganciare a ogni render() */
+  document.addEventListener("scroll", function (e) {
+    var el = e.target;
+    if (!el || el.id !== "chat-messages") return;
+    if (el.scrollTop < 60) loadOlderChatMessages();
+  }, true);
+
+  /* ============ swipe orizzontale per cambiare scheda (da mobile) ============
+     Un dito solo, spostamento orizzontale deciso e piu' orizzontale che verticale: swipe
+     verso sinistra passa alla scheda successiva della barra in alto, verso destra a quella
+     precedente. Ignorato dentro la lightbox (dove servirebbe per altro, es. cambiare foto)
+     e dentro la barra delle schede stessa (che scorre gia' orizzontalmente da sola). */
+  var TAB_ORDER = ["inventory", "community", "friends", "chat", "trades"];
+  var swipeStartX = 0, swipeStartY = 0, swipeTracking = false;
+  function swipeShouldIgnore(el) {
+    while (el && el.nodeType === 1) {
+      if (el.classList && el.classList.contains("tab-nav")) return true;
+      el = el.parentElement;
+    }
+    return false;
+  }
+  document.addEventListener("touchstart", function (e) {
+    if (!state.currentUser || state.lightbox || !e.touches || e.touches.length !== 1 || swipeShouldIgnore(e.target)) { swipeTracking = false; return; }
+    swipeStartX = e.touches[0].clientX;
+    swipeStartY = e.touches[0].clientY;
+    swipeTracking = true;
+  }, { passive: true });
+  document.addEventListener("touchend", function (e) {
+    if (!swipeTracking) return;
+    swipeTracking = false;
+    if (!e.changedTouches || !e.changedTouches.length) return;
+    var dx = e.changedTouches[0].clientX - swipeStartX;
+    var dy = e.changedTouches[0].clientY - swipeStartY;
+    if (Math.abs(dx) < 70 || Math.abs(dx) < Math.abs(dy) * 1.5) return; /* gesto troppo corto o troppo verticale: probabilmente e' solo scroll */
+    var idx = TAB_ORDER.indexOf(state.tab);
+    if (idx === -1) return;
+    var nextIdx = idx + (dx < 0 ? 1 : -1); /* verso sinistra = scheda successiva, verso destra = precedente */
+    if (nextIdx < 0 || nextIdx >= TAB_ORDER.length) return;
+    switchTab(TAB_ORDER[nextIdx]);
+  }, { passive: true });
 
   /* ============ helper for auth password ============ */
   document.addEventListener("input", function (e) {
@@ -2585,6 +2858,7 @@
         /* user signed out: clear everything so the auth screen shows */
         detachChat();
         detachTradesLiveWatch();
+        detachUnreadWatchers();
         setState({
           currentUser: "",
           needUsername: false,
