@@ -32,7 +32,10 @@
     paperclip: '<path d="M8 12.5l6.2-6.2a3.2 3.2 0 0 1 4.5 4.5L11.2 18a5 5 0 0 1-7.1-7.1L13.5 1.5"/>',
     video: '<rect x="3" y="6" width="13" height="12" rx="1.5"/><path d="M16 10l5-3v10l-5-3z"/>',
     "users-plus": '<circle cx="8.5" cy="8" r="3"/><path d="M2.5 20c0-3.31 2.69-6 6-6s6 2.69 6 6"/><path d="M18 8v6M15 11h6"/>',
-    star: '<path d="M12 3.3l2.7 5.6 6.1.8-4.4 4.3 1 6.1L12 17l-5.4 3.1 1-6.1L3.2 9.7l6.1-.8z"/>'
+    star: '<path d="M12 3.3l2.7 5.6 6.1.8-4.4 4.3 1 6.1L12 17l-5.4 3.1 1-6.1L3.2 9.7l6.1-.8z"/>',
+    "chevron-up": '<path d="M6 15l6-6 6 6"/>',
+    "chevron-down": '<path d="M6 9l6 6 6-6"/>',
+    mic: '<rect x="9" y="2.5" width="6" height="12" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0"/><path d="M12 17.5V21"/><path d="M8.5 21h7"/>'
   };
   function icon(name, extra) {
     return '<svg class="icon ' + (extra || "") + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">' + (ICON_PATHS[name] || "") + "</svg>";
@@ -116,6 +119,9 @@
   function sameUser(a, b) { return String(a || "").toLowerCase() === String(b || "").toLowerCase(); }
   var MAX_ITEM_PHOTOS = 6;
   var HISTORY_PAGE = 12; /* scambi mostrati per volta nello storico */
+  var INVENTORY_PAGE = 16; /* oggetti mostrati per volta in un inventario (il mio o quello altrui) */
+  var CHAT_PAGE = 30; /* messaggi caricati per volta in una chat */
+  var MAX_VOICE_SECONDS = 120; /* durata massima di un messaggio vocale, oltre si ferma da sola */
   function genId() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
 
   /* foto: supporta sia i vecchi oggetti con "photo" (singola) sia i nuovi con "photos" (array).
@@ -187,6 +193,7 @@
     editItemPhotos: [],
     inventory: [],
     inventorySearch: "",
+    inventoryRenderLimit: INVENTORY_PAGE,
     showTradeBuilder: false,
     wantIds: [],
     offerIds: [],
@@ -196,6 +203,7 @@
     selectedUser: null,
     otherUserInventory: [],
     otherUserSearch: "",
+    otherInventoryRenderLimit: INVENTORY_PAGE,
     historyFilter: "completed",
     historyLimit: HISTORY_PAGE,
     historySearch: "",
@@ -217,6 +225,9 @@
     showChatTradeBuilder: false,
     pendingChatMedia: null,
     chatMediaSending: false,
+    voiceRecording: null,
+    chatHasMoreOlder: false,
+    chatLoadingOlder: false,
     showDeleteAccountConfirm: false,
     tradeDuration: "",
     historyUserFilter: "",
@@ -365,6 +376,46 @@
       var i = findItemIndexById(itemId, serverInv);
       if (i > 0) { var it = serverInv.splice(i, 1)[0]; serverInv.unshift(it); }
       return serverInv;
+    }).then(function () { loadInventory(); }).catch(function (err) {
+      setMessage("Errore: " + err.message, "error");
+      loadInventory();
+    });
+  }
+
+  /* ============ riordino libero dell'inventario ============
+     Sposta un oggetto di una posizione avanti/indietro (dir: -1 o +1). L'ordine locale
+     cambia subito per reattivita', poi lo stesso spostamento (per id, non per indice)
+     viene rifatto anche lato server dentro una transazione, come per setAsProfileItem. */
+  function moveInventoryItem(itemId, dir) {
+    var inv = state.inventory;
+    var idx = findItemIndexById(itemId, inv);
+    var target = idx + dir;
+    if (idx < 0 || target < 0 || target >= inv.length) return;
+    var tmp = inv[idx]; inv[idx] = inv[target]; inv[target] = tmp;
+    render();
+    updateInventory(state.currentUser.toLowerCase(), function (serverInv) {
+      var i = findItemIndexById(itemId, serverInv);
+      var t = i + dir;
+      if (i < 0 || t < 0 || t >= serverInv.length) return serverInv;
+      var tmp2 = serverInv[i]; serverInv[i] = serverInv[t]; serverInv[t] = tmp2;
+      return serverInv;
+    }).then(function () { loadInventory(); }).catch(function (err) {
+      setMessage("Errore: " + err.message, "error");
+      loadInventory();
+    });
+  }
+
+  /* ============ ripristina l'ordine naturale (immagine profilo di default) ============
+     Riordina l'intero inventario per data di creazione ("created", non cambia mai) invece
+     che per data di ingresso nella collezione attuale, cosi' l'oggetto piu' "anziano"
+     torna in prima posizione (e quindi immagine profilo) annullando eventuali "Imposta
+     come profilo" o riordini manuali fatti in precedenza. */
+  function restoreProfileOrder() {
+    var sorted = state.inventory.slice().sort(function (a, b) { return (a.created || 0) - (b.created || 0); });
+    setState({ inventory: sorted });
+    render();
+    updateInventory(state.currentUser.toLowerCase(), function (serverInv) {
+      return serverInv.slice().sort(function (a, b) { return (a.created || 0) - (b.created || 0); });
     }).then(function () { loadInventory(); }).catch(function (err) {
       setMessage("Errore: " + err.message, "error");
       loadInventory();
@@ -805,7 +856,7 @@
        del mittente), stacca il listener della chat: altrimenti resterebbe attivo
        in background anche dopo essere passati alla tab Community */
     if (state.tab === "chat") { detachChat(); clearPendingChatMedia(); }
-    setState({ selectedUser: username, otherUserInventory: [], otherUserSearch: "", tab: "community", chatTarget: null });
+    setState({ selectedUser: username, otherUserInventory: [], otherUserSearch: "", otherInventoryRenderLimit: INVENTORY_PAGE, tab: "community", chatTarget: null });
     requestScrollTop();
     getInventory(username.toLowerCase()).then(function (inv) { setState({ otherUserInventory: inv }); render(); });
     render();
@@ -1023,12 +1074,24 @@
       openGroupChat(group.id);
     }).catch(function (err) { setMessage("Errore: " + dbErrorMessage(err, err.message), "error"); });
   }
+  /* messaggio di sistema nella chat di gruppo (es. "X ha lasciato il gruppo"): stesso
+     schema dei messaggi di sistema usati per gli scambi (vedi sendTradeSystemMessage).
+     Non blocca l'operazione principale se l'invio fallisce (non e' un dato critico). */
+  function sendGroupSystemMessage(groupId, text) {
+    var msgId = genId();
+    var msg = { id: msgId, from: state.currentUser, type: "system", text: text, created: Date.now() };
+    dbSet("groupChats/" + groupId + "/messages/" + msgId, msg).catch(function () { /* non critico: solo informativo */ });
+  }
   function leaveGroup(groupId) {
     if (!confirm("Uscire da questo gruppo?")) return;
     var dissolved = false;
+    var leavingUser = state.currentUser;
     dbGet("groups/" + groupId).then(function (g) {
       if (!g) return;
-      var members = toArray(g.members).filter(function (m) { return !sameUser(m, state.currentUser); });
+      var members = toArray(g.members).filter(function (m) { return !sameUser(m, leavingUser); });
+      /* messaggio in chat PRIMA di applicare l'uscita, cosi' resta visibile a chi rimane
+         nel gruppo anche nel caso in cui il gruppo venga sciolto subito dopo */
+      sendGroupSystemMessage(groupId, leavingUser + " ha lasciato il gruppo.");
       /* un gruppo con meno di 3 persone non ha piu' senso di esistere come gruppo (con 2
          persone sarebbe solo una chat 1-a-1, non un gruppo): se uscendo ne restano meno
          di 3, sciogliamo il gruppo invece di lasciarlo cosi' */
@@ -1424,13 +1487,13 @@
   /* ============ search & filter ============ */
   function clearSearch(target) {
     if (target === "community") { setState({ communitySearch: "" }); render(); }
-    else if (target === "inventory") { setState({ inventorySearch: "" }); render(); }
+    else if (target === "inventory") { setState({ inventorySearch: "", inventoryRenderLimit: INVENTORY_PAGE }); render(); }
     /* "history"/"historyFilters" ricalcolano subito state.history (updateHistory chiama
        gia' render() al suo interno), altrimenti il pulsante "cancella" azzererebbe lo
        stato del filtro senza aggiornare la lista mostrata */
     else if (target === "history") { setState({ historySearch: "", historyLimit: HISTORY_PAGE }); updateHistory(); }
     else if (target === "historyFilters") { setState({ historyUserFilter: "", historyDateFrom: "", historyDateTo: "", historyLimit: HISTORY_PAGE }); updateHistory(); }
-    else if (target === "otherInventory") { setState({ otherUserSearch: "" }); render(); }
+    else if (target === "otherInventory") { setState({ otherUserSearch: "", otherInventoryRenderLimit: INVENTORY_PAGE }); render(); }
     else if (target === "chat") { setState({ chatSearch: "" }); render(); }
     else if (target === "friends") { setState({ friendsSearch: "" }); render(); }
   }
@@ -1647,11 +1710,17 @@
         '</div>';
     }
     html += '</div>';
-    if (isOwn && reorder && !isProfile) {
-      /* unica azione possibile sulla posizione: portare subito questo oggetto come
-         immagine profilo (prima posizione). Nessun riordino libero degli altri oggetti. */
+    if (isOwn && reorder) {
+      /* frecce per riordinare liberamente l'oggetto di una posizione avanti/indietro,
+         piu' l'azione rapida per l'immagine profilo (Imposta come profilo / Ripristina) */
       html += '<div class="item-reorder">' +
-        '<button type="button" data-action="set-profile-item" data-id="' + escapeHtml(item.id) + '" class="btn-move-item btn-set-profile" title="Imposta come immagine profilo">' + icon("star") + ' Imposta come profilo</button>' +
+        '<div class="item-move-group">' +
+        '<button type="button" data-action="move-item-up" data-id="' + escapeHtml(item.id) + '" class="btn-icon btn-move-arrow" title="Sposta indietro"' + (reorder.idx <= 0 ? " disabled" : "") + '>' + icon("chevron-up") + '</button>' +
+        '<button type="button" data-action="move-item-down" data-id="' + escapeHtml(item.id) + '" class="btn-icon btn-move-arrow" title="Sposta avanti"' + (reorder.idx >= reorder.total - 1 ? " disabled" : "") + '>' + icon("chevron-down") + '</button>' +
+        '</div>' +
+        (isProfile
+          ? (reorder.canRestore ? '<button type="button" data-action="restore-profile-item" class="btn-move-item btn-set-profile" title="Torna all\'immagine profilo di default (oggetto piu\' vecchio)">' + icon("refresh") + ' Ripristina foto profilo</button>' : "")
+          : '<button type="button" data-action="set-profile-item" data-id="' + escapeHtml(item.id) + '" class="btn-move-item btn-set-profile" title="Imposta come immagine profilo">' + icon("star") + ' Imposta come profilo</button>') +
         '</div>';
     }
     if (isOwn) {
@@ -1670,14 +1739,22 @@
       html += '<div class="empty-state"><p>Nessun oggetto. Aggiungi il primo!</p></div>';
     } else {
       html += '<div class="search-box-wrap"><input type="text" id="inventory-search" placeholder="Cerca..." value="' + escapeHtml(state.inventorySearch) + '"/>' + (state.inventorySearch ? '<button type="button" data-action="clear-search" data-target="inventory" class="btn-clear">' + icon("x") + '</button>' : '') + '</div>';
-      var canSetProfile = !search && state.inventory.length > 1;
+      var canReorder = !search && state.inventory.length > 1;
       var profileId = profileItemId(state.inventory);
-      if (canSetProfile) { html += '<p class="photos-hint">Usa "Imposta come profilo" su un oggetto per usarlo come immagine profilo: è quella dell\'oggetto in prima posizione, mostrata agli altri ovunque nell\'app.</p>'; }
-      html += '<div class="items-grid">' + filtered.map(function (item) {
-        var reorder = canSetProfile ? { profileId: profileId } : null;
+      /* "Ripristina" ha senso mostrarlo solo se l'ordine attuale non e' gia' quello
+         naturale per data di creazione (altrimenti il pulsante non farebbe nulla) */
+      var canRestore = canReorder && state.inventory.some(function (it, i) {
+        return i > 0 && (it.created || 0) < (state.inventory[i - 1].created || 0);
+      });
+      if (canReorder) { html += '<p class="photos-hint">Usa le frecce per riordinare i tuoi oggetti, o "Imposta come profilo" per portarne uno in prima posizione: quello in prima posizione è l\'immagine profilo mostrata agli altri ovunque nell\'app.</p>'; }
+      var limit = state.inventoryRenderLimit || INVENTORY_PAGE;
+      var visible = filtered.slice(0, limit);
+      html += '<div class="items-grid">' + visible.map(function (item) {
+        var reorder = canReorder ? { profileId: profileId, idx: findItemIndexById(item.id, state.inventory), total: state.inventory.length, canRestore: canRestore } : null;
         return renderInventoryItem(item, true, reorder);
       }).join("") + '</div>';
       if (filtered.length === 0) { html += '<div class="empty-state"><p>Nessun risultato.</p></div>'; }
+      else if (filtered.length > limit) { html += '<div class="load-more"><button type="button" data-action="inventory-more" class="btn-ghost">Carica altri...</button></div>'; }
     }
     return html;
   }
@@ -1742,7 +1819,9 @@
       html += '<div class="empty-state"><p>Nessun oggetto disponibile.</p></div>';
     } else {
       html += '<div class="search-box-wrap"><input type="text" id="other-inventory-search" placeholder="Cerca nell\'inventario di ' + escapeHtml(state.selectedUser) + '..." value="' + escapeHtml(state.otherUserSearch) + '"/>' + (state.otherUserSearch ? '<button type="button" data-action="clear-search" data-target="otherInventory" class="btn-clear">' + icon("x") + '</button>' : '') + '</div>';
-      html += '<div class="items-grid">' + filteredOther.map(function (item) {
+      var otherLimit = state.otherInventoryRenderLimit || INVENTORY_PAGE;
+      var visibleOther = filteredOther.slice(0, otherLimit);
+      html += '<div class="items-grid">' + visibleOther.map(function (item) {
         var sel = state.wantIds.indexOf(item.id) !== -1;
         var photos = itemPhotos(item);
         var firstPhoto = photos[0];
@@ -1757,6 +1836,7 @@
           '</div><div class="item-info"><h3>' + escapeHtml(item.name) + '</h3></div></div>';
       }).join("") + '</div>';
       if (filteredOther.length === 0) { html += '<div class="empty-state"><p>Nessun risultato.</p></div>'; }
+      else if (filteredOther.length > otherLimit) { html += '<div class="load-more"><button type="button" data-action="other-inventory-more" class="btn-ghost">Carica altri...</button></div>'; }
       html += '<div class="trade-builder-btn"><button type="button" data-action="open-trade-builder" class="btn-primary block">' + icon("swap") + ' Proponi Scambio</button></div>';
     }
     if (state.showTradeBuilder) {
@@ -2347,6 +2427,11 @@
     else if (action === "move-edit-photo-right") { swapPhotos(state.editItemPhotos, parseInt(t.dataset.index, 10), 1); }
     else if (action === "delete-item") { deleteItem(t.dataset.id); }
     else if (action === "set-profile-item") { setAsProfileItem(t.dataset.id); }
+    else if (action === "move-item-up") { moveInventoryItem(t.dataset.id, -1); }
+    else if (action === "move-item-down") { moveInventoryItem(t.dataset.id, 1); }
+    else if (action === "restore-profile-item") { restoreProfileOrder(); }
+    else if (action === "inventory-more") { state.inventoryRenderLimit = (state.inventoryRenderLimit || INVENTORY_PAGE) + INVENTORY_PAGE; render(); }
+    else if (action === "other-inventory-more") { state.otherInventoryRenderLimit = (state.otherInventoryRenderLimit || INVENTORY_PAGE) + INVENTORY_PAGE; render(); }
     else if (action === "open-user") { openUser(t.dataset.username); }
     else if (action === "back-to-community") { backToCommunity(); }
     else if (action === "refresh-community") { loadCommunity(); }
@@ -2418,8 +2503,8 @@
     else if (e.target && e.target.id === "new-username") state.usernameInput = e.target.value;
     else if (e.target && e.target.id === "friend-username") { state.friendInput = e.target.value; render(); }
     else if (e.target && e.target.id === "community-search") { state.communitySearch = e.target.value; render(); }
-    else if (e.target && e.target.id === "inventory-search") { state.inventorySearch = e.target.value; syncSearchBox(e.target); updateInventoryResults(); }
-    else if (e.target && e.target.id === "other-inventory-search") { state.otherUserSearch = e.target.value; syncSearchBox(e.target); render(); }
+    else if (e.target && e.target.id === "inventory-search") { state.inventorySearch = e.target.value; state.inventoryRenderLimit = INVENTORY_PAGE; syncSearchBox(e.target); updateInventoryResults(); }
+    else if (e.target && e.target.id === "other-inventory-search") { state.otherUserSearch = e.target.value; state.otherInventoryRenderLimit = INVENTORY_PAGE; syncSearchBox(e.target); render(); }
     else if (e.target && e.target.id === "history-search") { state.historySearch = e.target.value; state.historyLimit = HISTORY_PAGE; syncSearchBox(e.target); updateHistory(); }
     else if (e.target && e.target.id === "chat-input") { state.chatInput = e.target.value; }
     else if (e.target && e.target.id === "chat-search") { state.chatSearch = e.target.value; syncSearchBox(e.target); render(); }
@@ -2520,6 +2605,7 @@
           editItemPhotos: [],
           inventory: [],
           inventorySearch: "",
+          inventoryRenderLimit: INVENTORY_PAGE,
           showTradeBuilder: false,
           wantIds: [],
           offerIds: [],
@@ -2528,6 +2614,7 @@
           communitySearch: "",
           selectedUser: null,
           otherUserInventory: [],
+          otherInventoryRenderLimit: INVENTORY_PAGE,
           historyFilter: "completed",
           historyLimit: HISTORY_PAGE,
           historySearch: "",
@@ -2550,6 +2637,9 @@
           otherUserSearch: "",
           pendingChatMedia: null,
           chatMediaSending: false,
+          voiceRecording: null,
+          chatHasMoreOlder: false,
+          chatLoadingOlder: false,
           showDeleteAccountConfirm: false,
           tradeDuration: "",
           historyUserFilter: "",
