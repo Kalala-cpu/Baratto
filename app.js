@@ -33,8 +33,6 @@
     video: '<rect x="3" y="6" width="13" height="12" rx="1.5"/><path d="M16 10l5-3v10l-5-3z"/>',
     "users-plus": '<circle cx="8.5" cy="8" r="3"/><path d="M2.5 20c0-3.31 2.69-6 6-6s6 2.69 6 6"/><path d="M18 8v6M15 11h6"/>',
     star: '<path d="M12 3.3l2.7 5.6 6.1.8-4.4 4.3 1 6.1L12 17l-5.4 3.1 1-6.1L3.2 9.7l6.1-.8z"/>',
-    "chevron-up": '<path d="M6 15l6-6 6 6"/>',
-    "chevron-down": '<path d="M6 9l6 6 6-6"/>',
     mic: '<rect x="9" y="2.5" width="6" height="12" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0"/><path d="M12 17.5V21"/><path d="M8.5 21h7"/>'
   };
   function icon(name, extra) {
@@ -406,16 +404,21 @@
   }
 
   /* ============ ripristina l'ordine naturale (immagine profilo di default) ============
-     Riordina l'intero inventario per data di creazione ("created", non cambia mai) invece
-     che per data di ingresso nella collezione attuale, cosi' l'oggetto piu' "anziano"
-     torna in prima posizione (e quindi immagine profilo) annullando eventuali "Imposta
-     come profilo" o riordini manuali fatti in precedenza. */
+     Riordina l'intero inventario per data di INGRESSO NELLA COLLEZIONE ATTUALE ("acquired"),
+     non per data di creazione originale dell'oggetto ("created"): un oggetto ricevuto in
+     uno scambio ha un "created" che risale a quando lo ha aggiunto il precedente
+     proprietario (magari anni fa), quindi ordinare per "created" poteva far diventare
+     profilo un oggetto arrivato ieri via scambio solo perche' "vecchio" in astratto.
+     "acquired" invece e' sempre "da quanto tempo ce l'ho IO", che e' il vero criterio per
+     stabilire qual e' il primo oggetto che ha "sempre" avuto in questo account: annulla
+     cosi' eventuali "Imposta come profilo" o riordini manuali fatti in precedenza. */
   function restoreProfileOrder() {
-    var sorted = state.inventory.slice().sort(function (a, b) { return (a.created || 0) - (b.created || 0); });
+    function sortKey(it) { return it.acquired || it.created || 0; }
+    var sorted = state.inventory.slice().sort(function (a, b) { return sortKey(a) - sortKey(b); });
     setState({ inventory: sorted });
     render();
     updateInventory(state.currentUser.toLowerCase(), function (serverInv) {
-      return serverInv.slice().sort(function (a, b) { return (a.created || 0) - (b.created || 0); });
+      return serverInv.slice().sort(function (a, b) { return sortKey(a) - sortKey(b); });
     }).then(function () { loadInventory(); }).catch(function (err) {
       setMessage("Errore: " + err.message, "error");
       loadInventory();
@@ -1924,11 +1927,11 @@
          piu' l'azione rapida per l'immagine profilo (Imposta come profilo / Ripristina) */
       html += '<div class="item-reorder">' +
         '<div class="item-move-group">' +
-        '<button type="button" data-action="move-item-up" data-id="' + escapeHtml(item.id) + '" class="btn-icon btn-move-arrow" title="Sposta indietro"' + (reorder.idx <= 0 ? " disabled" : "") + '>' + icon("chevron-up") + '</button>' +
-        '<button type="button" data-action="move-item-down" data-id="' + escapeHtml(item.id) + '" class="btn-icon btn-move-arrow" title="Sposta avanti"' + (reorder.idx >= reorder.total - 1 ? " disabled" : "") + '>' + icon("chevron-down") + '</button>' +
+        '<button type="button" data-action="move-item-left" data-id="' + escapeHtml(item.id) + '" class="btn-icon btn-move-arrow" title="Sposta indietro"' + (reorder.idx <= 0 ? " disabled" : "") + '>' + icon("chevron-left") + '</button>' +
+        '<button type="button" data-action="move-item-right" data-id="' + escapeHtml(item.id) + '" class="btn-icon btn-move-arrow" title="Sposta avanti"' + (reorder.idx >= reorder.total - 1 ? " disabled" : "") + '>' + icon("chevron-left", "icon-flip-h") + '</button>' +
         '</div>' +
         (isProfile
-          ? (reorder.canRestore ? '<button type="button" data-action="restore-profile-item" class="btn-move-item btn-set-profile" title="Torna all\'immagine profilo di default (oggetto piu\' vecchio)">' + icon("refresh") + ' Ripristina foto profilo</button>' : "")
+          ? (reorder.canRestore ? '<button type="button" data-action="restore-profile-item" class="btn-move-item btn-set-profile" title="Torna all\'oggetto che hai da più tempo in questa collezione">' + icon("refresh") + ' Ripristina foto profilo</button>' : "")
           : '<button type="button" data-action="set-profile-item" data-id="' + escapeHtml(item.id) + '" class="btn-move-item btn-set-profile" title="Imposta come immagine profilo">' + icon("star") + ' Imposta come profilo</button>') +
         '</div>';
     }
@@ -1951,9 +1954,13 @@
       var canReorder = !search && state.inventory.length > 1;
       var profileId = profileItemId(state.inventory);
       /* "Ripristina" ha senso mostrarlo solo se l'ordine attuale non e' gia' quello
-         naturale per data di creazione (altrimenti il pulsante non farebbe nulla) */
+         naturale di ingresso in questa collezione (altrimenti il pulsante non farebbe
+         nulla): si guarda 'acquired' (quando l'oggetto e' entrato nella COLLEZIONE
+         ATTUALE), non 'created' (quando l'oggetto e' stato creato la primissima volta
+         nell'app, che per un oggetto ricevuto in uno scambio puo' essere di un altro
+         utente e molto piu' vecchia di quando e' arrivato davvero da te). */
       var canRestore = canReorder && state.inventory.some(function (it, i) {
-        return i > 0 && (it.created || 0) < (state.inventory[i - 1].created || 0);
+        return i > 0 && (it.acquired || it.created || 0) < (state.inventory[i - 1].acquired || state.inventory[i - 1].created || 0);
       });
       if (canReorder) { html += '<p class="photos-hint">Usa le frecce per riordinare i tuoi oggetti, o "Imposta come profilo" per portarne uno in prima posizione: quello in prima posizione è l\'immagine profilo mostrata agli altri ovunque nell\'app.</p>'; }
       var limit = state.inventoryRenderLimit || INVENTORY_PAGE;
@@ -2654,8 +2661,8 @@
     else if (action === "move-edit-photo-right") { swapPhotos(state.editItemPhotos, parseInt(t.dataset.index, 10), 1); }
     else if (action === "delete-item") { deleteItem(t.dataset.id); }
     else if (action === "set-profile-item") { setAsProfileItem(t.dataset.id); }
-    else if (action === "move-item-up") { moveInventoryItem(t.dataset.id, -1); }
-    else if (action === "move-item-down") { moveInventoryItem(t.dataset.id, 1); }
+    else if (action === "move-item-left") { moveInventoryItem(t.dataset.id, -1); }
+    else if (action === "move-item-right") { moveInventoryItem(t.dataset.id, 1); }
     else if (action === "restore-profile-item") { restoreProfileOrder(); }
     else if (action === "inventory-more") { state.inventoryRenderLimit = (state.inventoryRenderLimit || INVENTORY_PAGE) + INVENTORY_PAGE; render(); }
     else if (action === "other-inventory-more") { state.otherInventoryRenderLimit = (state.otherInventoryRenderLimit || INVENTORY_PAGE) + INVENTORY_PAGE; render(); }
