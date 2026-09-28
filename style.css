@@ -1499,11 +1499,59 @@ input { font-family: inherit; }
 }
 @keyframes chat-recording-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
 
-/* bolla messaggio vocale ricevuto/inviato */
-.chat-bubble-audio { display: flex; align-items: center; gap: 0.5rem; }
-.chat-bubble-audio > .icon { width: 1rem; height: 1rem; color: var(--brass-dark); flex-shrink: 0; }
-.chat-bubble-audio audio { max-width: 230px; width: 100%; height: 2.2rem; }
-.chat-audio-duration { font-size: 0.72rem; color: var(--ink-soft); flex-shrink: 0; }
+/* player dei messaggi vocali (bolla in chat e anteprima prima dell'invio) */
+.chat-audio-player { display: flex; align-items: center; gap: 0.55rem; min-width: 190px; }
+.chat-audio-btn {
+  width: 2.2rem;
+  height: 2.2rem;
+  border-radius: 50%;
+  border: none;
+  background: var(--brass);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  cursor: pointer;
+  padding: 0;
+}
+.chat-audio-btn .icon { width: 1rem; height: 1rem; }
+.chat-audio-track { flex: 1; min-width: 60px; height: 0.3rem; border-radius: 999px; background: var(--line); overflow: hidden; }
+.chat-audio-bar { height: 100%; width: 0; background: var(--brass-dark); }
+.chat-audio-time { font-size: 0.72rem; color: var(--ink-soft); font-variant-numeric: tabular-nums; min-width: 2.2rem; text-align: right; flex-shrink: 0; }
+.chat-pending-preview .chat-audio-player { padding: 0.35rem 0.6rem; min-width: 180px; }
+
+/* fotocamera (solo computer): overlay a schermo intero con la webcam e il pulsante scatta */
+.camera-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  background: #000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.camera-video { flex: 1; min-height: 0; width: 100%; object-fit: contain; background: #000; }
+.camera-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  max-width: 480px;
+  padding: 1rem 1.25rem calc(1rem + env(safe-area-inset-bottom, 0px));
+}
+.camera-actions .btn-ghost { color: #fff; border-color: rgba(255, 255, 255, 0.45); }
+.camera-actions-spacer { width: 5rem; }
+.camera-shutter {
+  width: 4rem;
+  height: 4rem;
+  border-radius: 50%;
+  border: 4px solid #fff;
+  background: rgba(255, 255, 255, 0.25);
+  padding: 0;
+  cursor: pointer;
+}
+.camera-shutter:active { background: #fff; }
 
 .chat-form {
   display: flex;

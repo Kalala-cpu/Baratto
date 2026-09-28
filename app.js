@@ -33,6 +33,9 @@
     video: '<rect x="3" y="6" width="13" height="12" rx="1.5"/><path d="M16 10l5-3v10l-5-3z"/>',
     "users-plus": '<circle cx="8.5" cy="8" r="3"/><path d="M2.5 20c0-3.31 2.69-6 6-6s6 2.69 6 6"/><path d="M18 8v6M15 11h6"/>',
     star: '<path d="M12 3.3l2.7 5.6 6.1.8-4.4 4.3 1 6.1L12 17l-5.4 3.1 1-6.1L3.2 9.7l6.1-.8z"/>',
+    play: '<path d="M8 5v14l11-7z"/>',
+    pause: '<path d="M8 5v14M16 5v14"/>',
+    camera: '<path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.5"/>',
     mic: '<rect x="9" y="2.5" width="6" height="12" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0"/><path d="M12 17.5V21"/><path d="M8.5 21h7"/>'
   };
   function icon(name, extra) {
@@ -941,6 +944,7 @@
     state.chatMessages = merged;
   }
   function detachChat() {
+    stopChatAudio();
     if (chatRef) { chatRef.off("value"); chatRef = null; }
     chatLiveMessages = [];
     chatOlderMessages = [];
@@ -951,6 +955,7 @@
      cambia la chat attiva, altrimenti una foto/video scelto per una conversazione
      potrebbe finire inviato per sbaglio a un'altra se l'utente cambia chat prima di confermare */
   function clearPendingChatMedia() {
+    stopPendingAudioIfPlaying();
     if (state.pendingChatMedia && state.pendingChatMedia.previewUrl) { URL.revokeObjectURL(state.pendingChatMedia.previewUrl); }
     state.pendingChatMedia = null;
     if (state.voiceRecording || voiceMediaRecorder) { stopVoiceRecording(false); }
@@ -1180,16 +1185,158 @@
     var isImg = file.type && file.type.indexOf("image/") === 0;
     var isVid = file.type && file.type.indexOf("video/") === 0;
     if (!isImg && !isVid) { setMessage("Seleziona un'immagine o un video.", "error"); return; }
+    setPendingChatFile(file, isVid ? "video" : "image");
+  }
+  /* mette un file (scelto dal dispositivo o scattato con la fotocamera) in anteprima, in
+     attesa di conferma con il pulsante invia */
+  function setPendingChatFile(file, type) {
+    stopPendingAudioIfPlaying();
     if (state.pendingChatMedia && state.pendingChatMedia.previewUrl) { URL.revokeObjectURL(state.pendingChatMedia.previewUrl); }
     var previewUrl = URL.createObjectURL(file);
-    setState({ pendingChatMedia: { file: file, previewUrl: previewUrl, type: isVid ? "video" : "image" } });
+    setState({ pendingChatMedia: { file: file, previewUrl: previewUrl, type: type } });
     render();
   }
   /* annulla l'allegato in attesa: niente viene inviato */
   function cancelChatMedia() {
+    stopPendingAudioIfPlaying();
     if (state.pendingChatMedia && state.pendingChatMedia.previewUrl) { URL.revokeObjectURL(state.pendingChatMedia.previewUrl); }
     setState({ pendingChatMedia: null });
     render();
+  }
+
+  /* ============ riproduzione dei messaggi vocali ============
+     Un unico elemento Audio condiviso, fuori dal DOM: render() ricostruisce tutta la
+     pagina a ogni cambio di stato, quindi un <audio> dentro la bolla si fermava (o
+     spariva) a ogni aggiornamento. Qui la bolla ha solo pulsante play/pausa, barra e
+     durata; l'audio vero vive in chatAudio e continua a suonare anche se la chat si
+     aggiorna. "pending" e' l'id dell'anteprima del vocale appena registrato. */
+  var chatAudio = null;
+  var playingAudioId = null;
+  var audioKnownDuration = 0; /* durata salvata nel messaggio: i webm registrati non riportano la loro */
+  function audioSourceFor(id) {
+    if (id === "pending") return state.pendingChatMedia && state.pendingChatMedia.type === "audio" ? state.pendingChatMedia.previewUrl : null;
+    var m = (state.chatMessages || []).filter(function (x) { return x && x.id === id; })[0];
+    return m ? m.url : null;
+  }
+  function audioProgressPct(id) {
+    if (playingAudioId !== id || !chatAudio) return 0;
+    var dur = audioKnownDuration || (isFinite(chatAudio.duration) ? chatAudio.duration : 0);
+    return dur ? Math.min(100, (chatAudio.currentTime / dur) * 100) : 0;
+  }
+  function renderAudioPlayer(id, duration) {
+    var active = playingAudioId === id && chatAudio;
+    var playing = active && !chatAudio.paused;
+    return '<div class="chat-audio-player">' +
+      '<button type="button" class="chat-audio-btn" data-action="toggle-audio" data-id="' + escapeHtml(id) + '" title="' + (playing ? "Pausa" : "Ascolta") + '">' + icon(playing ? "pause" : "play") + '</button>' +
+      '<div class="chat-audio-track"><div class="chat-audio-bar" data-audio-bar="' + escapeHtml(id) + '" style="width:' + audioProgressPct(id).toFixed(1) + '%"></div></div>' +
+      '<span class="chat-audio-time" data-audio-time="' + escapeHtml(id) + '">' + formatRecordingTime(active ? chatAudio.currentTime : duration) + '</span>' +
+      '</div>';
+  }
+  /* aggiorna solo barra e tempo dell'audio in riproduzione, senza ridisegnare la pagina */
+  function updateAudioProgress() {
+    if (!playingAudioId || !chatAudio) return;
+    var pct = audioProgressPct(playingAudioId).toFixed(1) + "%";
+    Array.prototype.forEach.call(document.querySelectorAll("[data-audio-bar]"), function (el) { if (el.getAttribute("data-audio-bar") === playingAudioId) el.style.width = pct; });
+    Array.prototype.forEach.call(document.querySelectorAll("[data-audio-time]"), function (el) { if (el.getAttribute("data-audio-time") === playingAudioId) el.textContent = formatRecordingTime(chatAudio.currentTime); });
+  }
+  function stopChatAudio() {
+    if (chatAudio) {
+      var a = chatAudio;
+      chatAudio = null;
+      try { a.pause(); a.removeAttribute("src"); a.load(); } catch (e) { /* niente da fare */ }
+    }
+    playingAudioId = null;
+  }
+  function stopPendingAudioIfPlaying() { if (playingAudioId === "pending") stopChatAudio(); }
+  function toggleChatAudio(id) {
+    if (playingAudioId === id && chatAudio) {
+      if (chatAudio.paused) { chatAudio.play().catch(function () {}); } else { chatAudio.pause(); }
+      return;
+    }
+    var src = audioSourceFor(id);
+    if (!src) return;
+    stopChatAudio();
+    var m = (state.chatMessages || []).filter(function (x) { return x && x.id === id; })[0];
+    audioKnownDuration = id === "pending" ? ((state.pendingChatMedia && state.pendingChatMedia.duration) || 0) : ((m && m.duration) || 0);
+    var a = new Audio();
+    chatAudio = a;
+    playingAudioId = id;
+    a.preload = "auto";
+    a.src = src;
+    a.addEventListener("timeupdate", function () { if (a === chatAudio) updateAudioProgress(); });
+    a.addEventListener("play", function () { if (a === chatAudio) render(); });
+    a.addEventListener("pause", function () { if (a === chatAudio && !a.ended) render(); });
+    a.addEventListener("ended", function () { if (a !== chatAudio) return; stopChatAudio(); render(); });
+    a.addEventListener("error", function () {
+      if (a !== chatAudio) return;
+      stopChatAudio();
+      setMessage("Non riesco a riprodurre questo audio su questo dispositivo.", "error");
+      render();
+    });
+    var p = a.play();
+    if (p && p.catch) p.catch(function () {
+      if (a !== chatAudio) return;
+      stopChatAudio();
+      setMessage("Non riesco a riprodurre questo audio su questo dispositivo.", "error");
+      render();
+    });
+    render();
+  }
+
+  /* ============ scattare una foto con la fotocamera ============
+     Su telefono/tablet il campo file con capture apre direttamente la fotocamera del
+     dispositivo (qualita' e comandi nativi). Su computer un overlay con la webcam e il
+     pulsante "scatta". L'overlay e' creato a mano, fuori da render(): un <video> con lo
+     stream dentro la pagina ridisegnata a ogni aggiornamento resterebbe nero. */
+  var cameraOverlay = null;
+  var cameraStream = null;
+  function closeCameraOverlay() {
+    if (cameraStream) { cameraStream.getTracks().forEach(function (t) { t.stop(); }); cameraStream = null; }
+    if (cameraOverlay && cameraOverlay.parentNode) { cameraOverlay.parentNode.removeChild(cameraOverlay); }
+    cameraOverlay = null;
+  }
+  function takeCameraPhoto() {
+    var video = cameraOverlay && cameraOverlay.querySelector("video");
+    if (!video || !video.videoWidth) return;
+    var canvas = document.createElement("canvas");
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    canvas.getContext("2d").drawImage(video, 0, 0);
+    canvas.toBlob(function (blob) {
+      closeCameraOverlay();
+      if (!blob) { setMessage("Non sono riuscito a scattare la foto.", "error"); return; }
+      setPendingChatFile(new File([blob], "foto.jpg", { type: "image/jpeg" }), "image");
+    }, "image/jpeg", 0.9);
+  }
+  function openCameraCapture() {
+    if (cameraOverlay || state.voiceRecording) return;
+    var nativeInput = document.getElementById("chat-camera-input");
+    var touchDevice = window.matchMedia && window.matchMedia("(pointer: coarse)").matches;
+    if (touchDevice || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      if (nativeInput) nativeInput.click();
+      return;
+    }
+    navigator.mediaDevices.getUserMedia({ video: true, audio: false }).then(function (stream) {
+      cameraStream = stream;
+      var el = document.createElement("div");
+      el.className = "camera-overlay";
+      el.innerHTML = '<video class="camera-video" autoplay playsinline muted></video>' +
+        '<div class="camera-actions"><button type="button" class="btn-ghost" data-camera="cancel">Annulla</button>' +
+        '<button type="button" class="camera-shutter" data-camera="shoot" title="Scatta"></button>' +
+        '<span class="camera-actions-spacer"></span></div>';
+      el.addEventListener("click", function (ev) {
+        var b = ev.target.closest ? ev.target.closest("[data-camera]") : null;
+        if (!b) return;
+        if (b.getAttribute("data-camera") === "cancel") closeCameraOverlay(); else takeCameraPhoto();
+      });
+      document.body.appendChild(el);
+      cameraOverlay = el;
+      var video = el.querySelector("video");
+      video.srcObject = stream;
+      video.play().catch(function () {});
+    }).catch(function () {
+      setMessage("Non riesco ad accedere alla fotocamera: controlla i permessi del browser.", "error");
+    });
   }
 
   /* ============ messaggi vocali ============
@@ -1209,7 +1356,9 @@
     }
     navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
       voiceRecordedChunks = [];
-      var mimeType = (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported("audio/webm")) ? "audio/webm" : "";
+      /* mp4/AAC si riproduce ovunque (anche su iPhone/Safari), webm solo su Chrome/Firefox:
+         meglio mp4 quando il browser sa registrarlo */
+      var mimeType = ["audio/mp4", "audio/webm;codecs=opus", "audio/webm"].filter(function (t) { return MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(t); })[0] || "";
       try { voiceMediaRecorder = mimeType ? new MediaRecorder(stream, { mimeType: mimeType }) : new MediaRecorder(stream); }
       catch (e) { setMessage("Impossibile avviare la registrazione.", "error"); stream.getTracks().forEach(function (t) { t.stop(); }); return; }
       voiceMediaRecorder.ondataavailable = function (ev) { if (ev.data && ev.data.size) voiceRecordedChunks.push(ev.data); };
@@ -1241,7 +1390,7 @@
     rec.addEventListener("stop", function onStop() {
       rec.removeEventListener("stop", onStop);
       if (!keep || !voiceRecordedChunks.length) { render(); return; }
-      var blob = new Blob(voiceRecordedChunks, { type: rec.mimeType || "audio/webm" });
+      var blob = new Blob(voiceRecordedChunks, { type: (rec.mimeType || "audio/webm").split(";")[0] });
       var duration = Math.max(1, Math.round((Date.now() - startTs) / 1000));
       var previewUrl = URL.createObjectURL(blob);
       setState({ pendingChatMedia: { file: blob, previewUrl: previewUrl, type: "audio", duration: duration } });
@@ -1257,6 +1406,7 @@
     var pending = state.pendingChatMedia;
     var path = chatMessagesPath();
     if (!pending || !path || state.chatMediaSending) return;
+    stopPendingAudioIfPlaying();
     var file = pending.file, msgId = genId();
     setState({ pendingChatMedia: null, chatMediaSending: true, chatInput: "" });
     render();
@@ -2232,7 +2382,7 @@
       return '<div class="chat-bubble-media" data-action="view-chat-media" data-id="' + escapeHtml(m.id) + '"><video src="' + escapeHtml(m.url) + '" muted playsinline preload="metadata"></video><div class="chat-bubble-play">' + icon("video") + '</div></div>';
     }
     if (type === "audio") {
-      return '<div class="chat-bubble-audio">' + icon("mic") + '<audio controls preload="metadata" src="' + escapeHtml(m.url) + '"></audio>' + (m.duration ? '<span class="chat-audio-duration">' + formatRecordingTime(m.duration) + '</span>' : '') + '</div>';
+      return '<div class="chat-bubble-audio">' + renderAudioPlayer(m.id, m.duration) + '</div>';
     }
     if (type === "trade") {
       var trade = (state.allTrades || []).filter(function (t) { return t.id === m.tradeId; })[0];
@@ -2294,7 +2444,7 @@
         var showSender = isGroup && !own;
         return '<div class="chat-bubble-row ' + (own ? "own" : "") + (showSender ? " has-avatar" : "") + '">' +
           (showSender ? userAvatarHtml(m.from, "chat-bubble-avatar") : '') +
-          '<div class="chat-bubble ' + ((m.type === "image" || m.type === "video" || m.type === "audio") ? "chat-bubble-has-media" : "") + '">' +
+          '<div class="chat-bubble ' + ((m.type === "image" || m.type === "video") ? "chat-bubble-has-media" : "") + '">' +
           (showSender ? '<div class="chat-bubble-sender clickable" data-action="open-user" data-username="' + escapeHtml(m.from) + '" title="Vai all\'inventario di ' + escapeHtml(m.from) + '">' + escapeHtml(m.from) + '</div>' : '') +
           renderChatMessageContent(m) +
           '<div class="chat-bubble-time">' + formatChatTime(m.created) + '</div>' +
@@ -2317,7 +2467,7 @@
         (pm.type === "video"
           ? '<video src="' + escapeHtml(pm.previewUrl) + '" muted playsinline preload="metadata"></video>'
           : pm.type === "audio"
-          ? '<audio controls preload="metadata" src="' + escapeHtml(pm.previewUrl) + '"></audio>'
+          ? renderAudioPlayer("pending", pm.duration)
           : '<img src="' + escapeHtml(pm.previewUrl) + '" alt=""/>') +
         '</div>' +
         '<span class="chat-pending-label">' + (pm.type === "video" ? "Video pronto: premi invio per spedirlo" : pm.type === "audio" ? "Audio pronto: premi invio per spedirlo" : "Foto pronta: premi invio per spedirla") + '</span>' +
@@ -2330,6 +2480,8 @@
     var chatLen = (state.chatInput || "").length;
     html += '<form id="chat-form" class="chat-form">' +
       '<label class="chat-attach-btn" title="Invia foto o video"><input type="file" id="chat-media-input" accept="image/*,video/*" style="display:none"/>' + icon("paperclip") + '</label>' +
+      '<button type="button" data-action="open-camera" class="chat-attach-btn" title="Scatta una foto">' + icon("camera") + '</button>' +
+      '<input type="file" id="chat-camera-input" accept="image/*" capture="environment" style="display:none"/>' +
       '<button type="button" data-action="start-voice-recording" class="chat-attach-btn" title="Registra messaggio vocale">' + icon("mic") + '</button>' +
       '<input id="chat-input" type="text" autocomplete="off" maxlength="' + MAX_CHAT_MESSAGE_LEN + '" placeholder="' + (state.pendingChatMedia ? "Didascalia (opzionale)..." : "Scrivi un messaggio...") + '" value="' + escapeHtml(state.chatInput) + '"/>' +
       (chatLen > MAX_CHAT_MESSAGE_LEN - 80 ? '<span class="chat-char-count' + (chatLen >= MAX_CHAT_MESSAGE_LEN ? " limit" : "") + '">' + chatLen + '/' + MAX_CHAT_MESSAGE_LEN + '</span>' : '') +
@@ -2760,6 +2912,8 @@
     else if (action === "submit-chat-trade") { submitChatTrade(); }
     else if (action === "view-chat-media") { viewChatMedia(t.dataset.id); }
     else if (action === "cancel-chat-media") { cancelChatMedia(); }
+    else if (action === "toggle-audio") { toggleChatAudio(t.dataset.id); }
+    else if (action === "open-camera") { openCameraCapture(); }
     else if (action === "start-voice-recording") { startVoiceRecording(); }
     else if (action === "stop-voice-recording") { stopVoiceRecording(true); }
     else if (action === "cancel-voice-recording") { stopVoiceRecording(false); }
@@ -2795,7 +2949,7 @@
   document.addEventListener("change", function (e) {
     if (e.target && e.target.id === "photo-input") handleFileChange(e);
     else if (e.target && e.target.id === "photo-input-edit") handleFileChange(e);
-    else if (e.target && e.target.id === "chat-media-input") handleChatMediaChange(e);
+    else if (e.target && (e.target.id === "chat-media-input" || e.target.id === "chat-camera-input")) handleChatMediaChange(e);
     else if (e.target && e.target.type === "checkbox" && e.target.closest(".avail-toggle")) toggleAvailable(e.target.dataset.id);
     else if (e.target && e.target.id === "history-user-filter") { state.historyUserFilter = e.target.value; state.historyLimit = HISTORY_PAGE; updateHistory(); }
     else if (e.target && e.target.id === "history-date-from") { state.historyDateFrom = e.target.value; state.historyLimit = HISTORY_PAGE; updateHistory(); }
