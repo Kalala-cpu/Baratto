@@ -190,6 +190,7 @@
     editItemName: "",
     editItemPhotos: [],
     inventory: [],
+    avatarHidden: false, /* true = l'utente ha scelto di NON usare nessuna foto come immagine profilo (icona predefinita) */
     inventorySearch: "",
     inventoryRenderLimit: INVENTORY_PAGE,
     showTradeBuilder: false,
@@ -366,15 +367,21 @@
   function setAsProfileItem(itemId) {
     var inv = state.inventory;
     var idx = findItemIndexById(itemId, inv);
-    if (idx <= 0) return;
-    var item = inv.splice(idx, 1)[0];
-    inv.unshift(item);
+    if (idx < 0) return;
+    /* scegliere esplicitamente un oggetto come profilo annulla un eventuale "nessuna foto
+       profilo" (Ripristina foto profilo): si torna a mostrare una foto vera */
+    var wasHidden = state.avatarHidden;
+    if (idx > 0) { var item = inv.splice(idx, 1)[0]; inv.unshift(item); }
+    if (wasHidden) { state.avatarHidden = false; }
     render();
-    updateInventory(state.currentUser.toLowerCase(), function (serverInv) {
-      var i = findItemIndexById(itemId, serverInv);
-      if (i > 0) { var it = serverInv.splice(i, 1)[0]; serverInv.unshift(it); }
-      return serverInv;
-    }).then(function () { loadInventory(); }).catch(function (err) {
+    (wasHidden ? setAvatarHidden(false) : Promise.resolve()).then(function () {
+      if (idx <= 0) return;
+      return updateInventory(state.currentUser.toLowerCase(), function (serverInv) {
+        var i = findItemIndexById(itemId, serverInv);
+        if (i > 0) { var it = serverInv.splice(i, 1)[0]; serverInv.unshift(it); }
+        return serverInv;
+      });
+    }).then(function () { loadInventory(); loadCommunity(); }).catch(function (err) {
       setMessage("Errore: " + err.message, "error");
       loadInventory();
     });
@@ -390,38 +397,39 @@
     var target = idx + dir;
     if (idx < 0 || target < 0 || target >= inv.length) return;
     var tmp = inv[idx]; inv[idx] = inv[target]; inv[target] = tmp;
+    /* se lo spostamento cambia l'oggetto in prima posizione, e' una scelta esplicita di
+       una nuova foto profilo: annulla un eventuale "nessuna foto profilo" */
+    var touchesProfile = idx === 0 || target === 0; /* cambia chi e' in prima posizione (= foto profilo) */
+    var changesProfile = touchesProfile && state.avatarHidden;
+    if (changesProfile) { state.avatarHidden = false; }
     render();
-    updateInventory(state.currentUser.toLowerCase(), function (serverInv) {
-      var i = findItemIndexById(itemId, serverInv);
-      var t = i + dir;
-      if (i < 0 || t < 0 || t >= serverInv.length) return serverInv;
-      var tmp2 = serverInv[i]; serverInv[i] = serverInv[t]; serverInv[t] = tmp2;
-      return serverInv;
-    }).then(function () { loadInventory(); }).catch(function (err) {
+    (changesProfile ? setAvatarHidden(false) : Promise.resolve()).then(function () {
+      return updateInventory(state.currentUser.toLowerCase(), function (serverInv) {
+        var i = findItemIndexById(itemId, serverInv);
+        var t = i + dir;
+        if (i < 0 || t < 0 || t >= serverInv.length) return serverInv;
+        var tmp2 = serverInv[i]; serverInv[i] = serverInv[t]; serverInv[t] = tmp2;
+        return serverInv;
+      });
+    }).then(function () { loadInventory(); if (touchesProfile) loadCommunity(); }).catch(function (err) {
       setMessage("Errore: " + err.message, "error");
       loadInventory();
     });
   }
 
-  /* ============ ripristina l'ordine naturale (immagine profilo di default) ============
-     Riordina l'intero inventario per data di INGRESSO NELLA COLLEZIONE ATTUALE ("acquired"),
-     non per data di creazione originale dell'oggetto ("created"): un oggetto ricevuto in
-     uno scambio ha un "created" che risale a quando lo ha aggiunto il precedente
-     proprietario (magari anni fa), quindi ordinare per "created" poteva far diventare
-     profilo un oggetto arrivato ieri via scambio solo perche' "vecchio" in astratto.
-     "acquired" invece e' sempre "da quanto tempo ce l'ho IO", che e' il vero criterio per
-     stabilire qual e' il primo oggetto che ha "sempre" avuto in questo account: annulla
-     cosi' eventuali "Imposta come profilo" o riordini manuali fatti in precedenza. */
-  function restoreProfileOrder() {
-    function sortKey(it) { return it.acquired || it.created || 0; }
-    var sorted = state.inventory.slice().sort(function (a, b) { return sortKey(a) - sortKey(b); });
-    setState({ inventory: sorted });
+  /* ============ ripristina foto profilo = torna all'avatar predefinito ============
+     "Come se non l'avessi": nessuna foto di nessun oggetto viene usata come immagine
+     profilo, ovunque nell'app (per me e per gli altri) compare l'icona predefinita. Non
+     tocca l'ordine dell'inventario: e' solo un flag (nodo "avatarHidden"), che si annulla
+     da solo appena scegli di nuovo un oggetto come profilo ("Imposta come profilo") o ne
+     sposti uno in prima posizione con le frecce. */
+  function clearProfilePhoto() {
+    setState({ avatarHidden: true });
     render();
-    updateInventory(state.currentUser.toLowerCase(), function (serverInv) {
-      return serverInv.slice().sort(function (a, b) { return sortKey(a) - sortKey(b); });
-    }).then(function () { loadInventory(); }).catch(function (err) {
+    setAvatarHidden(true).then(function () { loadCommunity(); }).catch(function (err) {
+      setState({ avatarHidden: false });
       setMessage("Errore: " + err.message, "error");
-      loadInventory();
+      render();
     });
   }
 
@@ -446,15 +454,28 @@
 
   /* ============ loads ============ */
   function loadInventory() { getInventory(state.currentUser.toLowerCase()).then(function (inv) { setState({ inventory: inv }); render(); }); }
+  /* flag "nessuna foto profilo": se true, per gli altri (e per me stesso) l'avatar e' l'icona
+     predefinita invece della foto del primo oggetto. Vive in un nodo a parte, leggibile da
+     tutti gli utenti autenticati, perche' gli altri devono poterlo rispettare in Community,
+     amici e chat (il nodo "profiles" e' privato, quindi non andava bene). */
+  function loadAvatarHidden() {
+    dbGet("avatarHidden/" + state.currentUser.toLowerCase()).then(function (v) { setState({ avatarHidden: !!v }); render(); }).catch(function () { /* non critico: resta la foto del primo oggetto */ });
+  }
+  function setAvatarHidden(hidden) {
+    var ref = fbDb.ref("avatarHidden/" + state.currentUser.toLowerCase());
+    return (hidden ? ref.set(true) : ref.remove());
+  }
   /* Carica TUTTI gli utenti registrati (da "usernames") e le loro inventory.
      Ogni utente compare nella community anche se ha 0 oggetti. */
   function loadCommunity() {
     Promise.all([
       dbGet("usernames"),
-      dbGet("inventories")
+      dbGet("inventories"),
+      dbGet("avatarHidden").catch(function () { return {}; }) /* non critico: se fallisce si usano le foto */
     ]).then(function (results) {
       var usernames = results[0] || {};
       var invs = results[1] || {};
+      var hiddenAvatars = results[2] || {};
       var users = [];
       var allItems = [];
       Object.keys(usernames).forEach(function (uLower) {
@@ -468,7 +489,10 @@
            Inventario), anche se quell'oggetto e' segnato come "non disponibile":
            l'utente puo' cosi' scegliere liberamente la propria immagine profilo senza
            dover per forza tenere quell'oggetto disponibile per lo scambio */
-        users.push({ username: displayName, uLower: uLower, itemCount: items.length, firstItem: allInv[0] || null });
+        /* chi ha scelto "nessuna foto profilo" non espone la foto del primo oggetto:
+           firstItem null -> findCommunityUserPhoto restituisce null -> icona predefinita
+           ovunque (community, amici, chat, gruppi) senza toccare il resto del rendering */
+        users.push({ username: displayName, uLower: uLower, itemCount: items.length, firstItem: hiddenAvatars[uLower] ? null : (allInv[0] || null) });
         items.forEach(function (item) {
           var copy = Object.assign({}, item);
           copy.user = uLower;
@@ -654,6 +678,7 @@
         editItemName: "",
         editItemPhotos: [],
         inventory: [],
+        avatarHidden: false,
         inventorySearch: "",
         showTradeBuilder: false,
         wantIds: [],
@@ -763,7 +788,7 @@
   function resolveProfile(fbUser) {
     dbGet("profiles/" + fbUser.uid).then(function (profile) {
       var uname = profile && profile.username;
-      if (uname) { setState({ currentUser: uname }); loadInventory(); loadCommunity(); loadFriends(); loadTrades(); loadGroups(); attachTradesLiveWatch(); restoreFromHash(); }
+      if (uname) { setState({ currentUser: uname }); loadInventory(); loadAvatarHidden(); loadCommunity(); loadFriends(); loadTrades(); loadGroups(); attachTradesLiveWatch(); restoreFromHash(); }
       else { setState({ needUsername: true, usernameInput: "" }); }
       render();
     }).catch(function (err) {
@@ -789,6 +814,7 @@
       }).then(function () {
         setState({ currentUser: u, needUsername: false });
         loadInventory();
+        loadAvatarHidden();
         loadCommunity();
         loadFriends();
         loadTrades();
@@ -1041,7 +1067,50 @@
   function hasAnyUnreadChat() {
     return Object.keys(chatLastMsgTs).some(isChatUnread);
   }
+  /* ascolto live dei gruppi di cui faccio parte: state.groups viene caricato una volta sola
+     (loadGroups), quindi senza questo chi resta in un gruppo continuava a vedere il numero
+     di membri e gli avatar di prima quando qualcuno usciva (o il gruppo veniva sciolto). */
+  var groupWatchers = {}; /* groupId -> { ref, handler } */
+  function detachGroupWatchers() {
+    Object.keys(groupWatchers).forEach(function (k) { groupWatchers[k].ref.off("value", groupWatchers[k].handler); });
+    groupWatchers = {};
+  }
+  function applyGroupUpdate(groupId, data) {
+    var idx = findItemIndexById(groupId, state.groups);
+    if (idx < 0) return;
+    var members = data ? toArray(data.members) : [];
+    var stillMember = members.some(function (m) { return sameUser(m, state.currentUser); });
+    var isOpen = state.chatTarget && state.chatTarget.type === "group" && state.chatTarget.id === groupId;
+    if (!data || !stillMember) {
+      /* gruppo sciolto (nodo cancellato) o non ne faccio piu' parte: sparisce dalla lista */
+      state.groups = state.groups.filter(function (g) { return g.id !== groupId; });
+      if (isOpen) {
+        closeChat();
+        if (!data && groupLeaveInProgress !== groupId) { setMessage("Il gruppo è stato sciolto: è rimasta una sola persona.", "success"); }
+      }
+      render();
+      return;
+    }
+    var old = state.groups[idx];
+    var unchanged = old && old.name === data.name && JSON.stringify(toArray(old.members)) === JSON.stringify(members);
+    if (unchanged) return;
+    var updated = Object.assign({}, data, { members: members });
+    state.groups = state.groups.slice();
+    state.groups[idx] = updated;
+    if (isOpen) { state.chatTarget = Object.assign({}, state.chatTarget, { name: updated.name, members: members }); }
+    render();
+  }
+  function attachGroupWatchers() {
+    detachGroupWatchers();
+    (state.groups || []).forEach(function (g) {
+      var ref = fbDb.ref("groups/" + g.id);
+      var handler = function (snap) { applyGroupUpdate(g.id, snap.val()); };
+      ref.on("value", handler);
+      groupWatchers[g.id] = { ref: ref, handler: handler };
+    });
+  }
   function detachUnreadWatchers() {
+    detachGroupWatchers();
     Object.keys(chatUnreadWatchers).forEach(function (k) {
       chatUnreadWatchers[k].ref.off("value", chatUnreadWatchers[k].handler);
     });
@@ -1051,6 +1120,7 @@
      va richiamata ogni volta che cambia la lista amici o gruppi (aggiunte/rimozioni) */
   function attachUnreadWatchers() {
     detachUnreadWatchers();
+    attachGroupWatchers();
     var entries = [];
     (state.friends || []).filter(function (f) { return f && f.status === "accepted"; }).forEach(function (f) {
       entries.push({ key: chatKeyForFriend(f.username), path: "chats/" + chatIdFor(state.currentUser, f.username) + "/messages" });
@@ -1294,27 +1364,32 @@
     var msg = { id: msgId, from: state.currentUser, type: "system", text: text, created: Date.now() };
     dbSet("groupChats/" + groupId + "/messages/" + msgId, msg).catch(function () { /* non critico: solo informativo */ });
   }
+  /* id del gruppo che sto lasciando io: il listener live (applyGroupUpdate) lo usa per non
+     mostrare a me il messaggio "gruppo sciolto" pensato per chi resta */
+  var groupLeaveInProgress = null;
   function leaveGroup(groupId) {
     if (!confirm("Uscire da questo gruppo?")) return;
     var dissolved = false;
     var leavingUser = state.currentUser;
+    groupLeaveInProgress = groupId;
     dbGet("groups/" + groupId).then(function (g) {
       if (!g) return;
       var members = toArray(g.members).filter(function (m) { return !sameUser(m, leavingUser); });
-      /* messaggio in chat PRIMA di applicare l'uscita, cosi' resta visibile a chi rimane
-         nel gruppo anche nel caso in cui il gruppo venga sciolto subito dopo */
-      sendGroupSystemMessage(groupId, leavingUser + " ha lasciato il gruppo.");
-      /* un gruppo con meno di 3 persone non ha piu' senso di esistere come gruppo (con 2
-         persone sarebbe solo una chat 1-a-1, non un gruppo): se uscendo ne restano meno
-         di 3, sciogliamo il gruppo invece di lasciarlo cosi' */
-      if (members.length < 3) { dissolved = true; return fbDb.ref("groups/" + groupId).remove(); }
+      /* con una sola persona rimasta non c'e' piu' un gruppo: lo sciogliamo. Da 2 persone
+         in su resta un gruppo (anche se creato con 3+), con il numero di membri aggiornato */
+      if (members.length < 2) { dissolved = true; return fbDb.ref("groups/" + groupId).remove(); }
       g.members = members;
-      return dbSet("groups/" + groupId, g);
+      return dbSet("groups/" + groupId, g).then(function () {
+        /* avviso in chat solo se il gruppo continua a esistere (altrimenti non lo leggerebbe
+           nessuno) e solo dopo che l'uscita e' andata a buon fine */
+        sendGroupSystemMessage(groupId, leavingUser + " ha lasciato il gruppo.");
+      });
     }).then(function () {
-      setMessage(dissolved ? "Hai lasciato il gruppo: essendo rimaste meno di 3 persone, il gruppo è stato sciolto." : "Hai lasciato il gruppo.", "success");
+      groupLeaveInProgress = null;
+      setMessage(dissolved ? "Hai lasciato il gruppo: è rimasta una sola persona, quindi il gruppo è stato sciolto." : "Hai lasciato il gruppo.", "success");
       closeChat();
       loadGroups();
-    }).catch(function (err) { setMessage("Errore: " + err.message, "error"); });
+    }).catch(function (err) { groupLeaveInProgress = null; setMessage("Errore: " + err.message, "error"); });
   }
 
   /* ============ trades ============ */
@@ -1850,6 +1925,7 @@
   function findCommunityUserPhoto(username) {
     var uLower = String(username || "").toLowerCase();
     if (state.currentUser && uLower === String(state.currentUser).toLowerCase()) {
+      if (state.avatarHidden) return null;
       var own = state.inventory && state.inventory[0];
       var ownPhotos = own ? itemPhotos(own) : [];
       return ownPhotos.length ? ownPhotos[0] : null;
@@ -1888,7 +1964,7 @@
      a differenza di userAvatarHtml, qui la foto si prende da state.inventory (gia' in
      memoria), non da communityUsers (che non include mai se stessi) */
   function ownAvatarHtml() {
-    var first = state.inventory && state.inventory[0];
+    var first = !state.avatarHidden && state.inventory && state.inventory[0];
     var photos = first ? itemPhotos(first) : [];
     if (!photos.length) return '<span class="profile-btn-avatar">' + icon("user") + '</span>';
     var p = photos[0];
@@ -1900,7 +1976,7 @@
 
   function renderInventoryItem(item, isOwn, reorder) {
     var av = isAvailable(item), photos = itemPhotos(item);
-    var isProfile = isOwn && reorder && reorder.profileId === item.id;
+    var isProfile = isOwn && reorder && !reorder.avatarHidden && reorder.profileId === item.id;
     var html = '<div class="item-card ' + (av ? "" : "unavailable") + '">';
     if (photos.length) {
       var firstPhoto = photos[0];
@@ -1931,7 +2007,7 @@
         '<button type="button" data-action="move-item-right" data-id="' + escapeHtml(item.id) + '" class="btn-icon btn-move-arrow" title="Sposta avanti"' + (reorder.idx >= reorder.total - 1 ? " disabled" : "") + '>' + icon("chevron-left", "icon-flip-h") + '</button>' +
         '</div>' +
         (isProfile
-          ? (reorder.canRestore ? '<button type="button" data-action="restore-profile-item" class="btn-move-item btn-set-profile" title="Torna all\'oggetto che hai da più tempo in questa collezione">' + icon("refresh") + ' Ripristina foto profilo</button>' : "")
+          ? '<button type="button" data-action="clear-profile-photo" class="btn-move-item btn-set-profile" title="Rimuovi la foto profilo e usa l\'icona predefinita">' + icon("refresh") + ' Ripristina foto profilo</button>'
           : '<button type="button" data-action="set-profile-item" data-id="' + escapeHtml(item.id) + '" class="btn-move-item btn-set-profile" title="Imposta come immagine profilo">' + icon("star") + ' Imposta come profilo</button>') +
         '</div>';
     }
@@ -1951,22 +2027,16 @@
       html += '<div class="empty-state"><p>Nessun oggetto. Aggiungi il primo!</p></div>';
     } else {
       html += '<div class="search-box-wrap"><input type="text" id="inventory-search" placeholder="Cerca..." value="' + escapeHtml(state.inventorySearch) + '"/>' + (state.inventorySearch ? '<button type="button" data-action="clear-search" data-target="inventory" class="btn-clear">' + icon("x") + '</button>' : '') + '</div>';
-      var canReorder = !search && state.inventory.length > 1;
+      /* anche con un solo oggetto servono i pulsanti profilo (Imposta / Ripristina): le frecce
+         restano semplicemente disattivate */
+      var canReorder = !search && state.inventory.length > 0;
       var profileId = profileItemId(state.inventory);
-      /* "Ripristina" ha senso mostrarlo solo se l'ordine attuale non e' gia' quello
-         naturale di ingresso in questa collezione (altrimenti il pulsante non farebbe
-         nulla): si guarda 'acquired' (quando l'oggetto e' entrato nella COLLEZIONE
-         ATTUALE), non 'created' (quando l'oggetto e' stato creato la primissima volta
-         nell'app, che per un oggetto ricevuto in uno scambio puo' essere di un altro
-         utente e molto piu' vecchia di quando e' arrivato davvero da te). */
-      var canRestore = canReorder && state.inventory.some(function (it, i) {
-        return i > 0 && (it.acquired || it.created || 0) < (state.inventory[i - 1].acquired || state.inventory[i - 1].created || 0);
-      });
-      if (canReorder) { html += '<p class="photos-hint">Usa le frecce per riordinare i tuoi oggetti, o "Imposta come profilo" per portarne uno in prima posizione: quello in prima posizione è l\'immagine profilo mostrata agli altri ovunque nell\'app.</p>'; }
+      if (canReorder && state.avatarHidden) { html += '<p class="photos-hint">Al momento non hai nessuna foto profilo (viene mostrata l\'icona predefinita). Usa "Imposta come profilo" su un oggetto per sceglierne una.</p>'; }
+      else if (canReorder && state.inventory.length > 1) { html += '<p class="photos-hint">Usa le frecce per riordinare i tuoi oggetti, o "Imposta come profilo" per portarne uno in prima posizione: quello in prima posizione è l\'immagine profilo mostrata agli altri ovunque nell\'app.</p>'; }
       var limit = state.inventoryRenderLimit || INVENTORY_PAGE;
       var visible = filtered.slice(0, limit);
       html += '<div class="items-grid">' + visible.map(function (item) {
-        var reorder = canReorder ? { profileId: profileId, idx: findItemIndexById(item.id, state.inventory), total: state.inventory.length, canRestore: canRestore } : null;
+        var reorder = canReorder ? { profileId: profileId, idx: findItemIndexById(item.id, state.inventory), total: state.inventory.length, avatarHidden: state.avatarHidden } : null;
         return renderInventoryItem(item, true, reorder);
       }).join("") + '</div>';
       if (filtered.length === 0) { html += '<div class="empty-state"><p>Nessun risultato.</p></div>'; }
@@ -2663,7 +2733,7 @@
     else if (action === "set-profile-item") { setAsProfileItem(t.dataset.id); }
     else if (action === "move-item-left") { moveInventoryItem(t.dataset.id, -1); }
     else if (action === "move-item-right") { moveInventoryItem(t.dataset.id, 1); }
-    else if (action === "restore-profile-item") { restoreProfileOrder(); }
+    else if (action === "clear-profile-photo") { clearProfilePhoto(); }
     else if (action === "inventory-more") { state.inventoryRenderLimit = (state.inventoryRenderLimit || INVENTORY_PAGE) + INVENTORY_PAGE; render(); }
     else if (action === "other-inventory-more") { state.otherInventoryRenderLimit = (state.otherInventoryRenderLimit || INVENTORY_PAGE) + INVENTORY_PAGE; render(); }
     else if (action === "open-user") { openUser(t.dataset.username); }
@@ -2885,6 +2955,7 @@
           editItemName: "",
           editItemPhotos: [],
           inventory: [],
+          avatarHidden: false,
           inventorySearch: "",
           inventoryRenderLimit: INVENTORY_PAGE,
           showTradeBuilder: false,
