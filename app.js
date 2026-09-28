@@ -1474,6 +1474,17 @@
     var d = new Date(ts);
     return d.getDate() + " " + ITEM_DATE_MONTHS[d.getMonth()] + " " + d.getFullYear();
   }
+  /* data di creazione di un oggetto ('created'). Per gli oggetti salvati prima che il campo
+     esistesse la si ricava dall'id: genId() genera "timestamp in base 36 (8 caratteri) +
+     caratteri casuali", quindi i primi 8 caratteri sono il momento esatto in cui e' stato
+     creato. Si accetta solo se e' una data plausibile, altrimenti 0 (sconosciuta). */
+  function itemCreatedTs(item) {
+    if (item.created) return item.created;
+    var id = String(item.id || "");
+    if (id.length < 8) return 0;
+    var ts = parseInt(id.slice(0, 8), 36);
+    return (ts >= Date.UTC(2015, 0, 1) && ts <= Date.now() + 86400000) ? ts : 0;
+  }
   /* date mostrate su una card.
      - Nel MIO inventario: la data di acquisto ('acquired': da quando l'oggetto e' nella mia
        collezione, cioe' quando l'ho aggiunto o ricevuto con uno scambio) e, se diversa,
@@ -1481,12 +1492,12 @@
      - Negli inventari degli ALTRI: solo la data di aggiunta all'app ('created').
      Fallback sull'altro campo per gli oggetti salvati prima che esistessero. */
   function renderItemDatesHtml(item, isOwn) {
-    var createdTs = item.created || item.acquired;
+    var createdTs = itemCreatedTs(item) || item.acquired;
     if (!isOwn) {
       if (!createdTs) return "";
       return '<div class="item-dates"><div class="item-date">' + icon("calendar") + ' Aggiunto il ' + formatItemDate(createdTs) + '</div></div>';
     }
-    var acquiredTs = item.acquired || item.created;
+    var acquiredTs = item.acquired || createdTs;
     if (!acquiredTs) return "";
     var html = '<div class="item-dates"><div class="item-date">' + icon("calendar") + ' Acquisito il ' + formatItemDate(acquiredTs) + '</div>';
     if (createdTs && formatItemDate(createdTs) !== formatItemDate(acquiredTs)) {
@@ -1751,8 +1762,15 @@
           throw new Error("Alcuni oggetti coinvolti non sono più disponibili: lo scambio non può essere completato.");
         }
         var swapTs = Date.now();
-        offerItems.forEach(function (it) { it.acquired = swapTs; });
-        wantItems.forEach(function (it) { it.acquired = swapTs; });
+        /* prima di sovrascrivere 'acquired' si fissa 'created' negli oggetti vecchi che non
+           l'avevano (ricavata dall'id, o dal precedente 'acquired'): altrimenti dopo lo
+           scambio la data di aggiunta all'app andrebbe persa */
+        function markSwapped(it) {
+          if (!it.created) { it.created = itemCreatedTs(it) || it.acquired || swapTs; }
+          it.acquired = swapTs;
+        }
+        offerItems.forEach(markSwapped);
+        wantItems.forEach(markSwapped);
         return updateInventory(fromU, function (inv) {
           return inv.filter(function (it) { return offerIds.indexOf(it.id) === -1; }).concat(wantItems);
         }).then(function () {
