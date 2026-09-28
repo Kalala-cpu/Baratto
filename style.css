@@ -545,6 +545,10 @@ input { font-family: inherit; }
 }
 .page-header h2 { font-family: "Fraunces", Georgia, serif; font-size: 1.4rem; }
 .page-header-title { display: flex; align-items: center; gap: 0.6rem; }
+/* intestazione del profilo di un altro utente: icona profilo + nome */
+.user-page-title { display: flex; align-items: center; gap: 0.7rem; min-width: 0; }
+.chat-avatar.user-page-avatar { width: 2.8rem; height: 2.8rem; }
+.chat-avatar.user-page-avatar .icon { width: 1.4rem; height: 1.4rem; }
 .user-page-name.clickable {
   cursor: pointer;
   border-radius: var(--radius-sm);

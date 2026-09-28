@@ -1474,14 +1474,25 @@
     var d = new Date(ts);
     return d.getDate() + " " + ITEM_DATE_MONTHS[d.getMonth()] + " " + d.getFullYear();
   }
-  /* data mostrata sulle card di un inventario (il mio o quello di un altro utente):
-     solo la data di aggiunta all'app ("created", non cambia mai nel tempo, anche dopo
-     eventuali scambi che cambiano proprietario dell'oggetto). Fallback su 'acquired' per
-     eventuali oggetti salvati prima che esistesse il campo 'created'. */
-  function renderItemDatesHtml(item) {
-    var ts = item.created || item.acquired;
-    if (!ts) return "";
-    return '<div class="item-dates"><div class="item-date">' + icon("calendar") + ' Aggiunto il ' + formatItemDate(ts) + '</div></div>';
+  /* date mostrate su una card.
+     - Nel MIO inventario: la data di acquisto ('acquired': da quando l'oggetto e' nella mia
+       collezione, cioe' quando l'ho aggiunto o ricevuto con uno scambio) e, se diversa,
+       anche quella di aggiunta originale all'app ('created', non cambia mai).
+     - Negli inventari degli ALTRI: solo la data di aggiunta all'app ('created').
+     Fallback sull'altro campo per gli oggetti salvati prima che esistessero. */
+  function renderItemDatesHtml(item, isOwn) {
+    var createdTs = item.created || item.acquired;
+    if (!isOwn) {
+      if (!createdTs) return "";
+      return '<div class="item-dates"><div class="item-date">' + icon("calendar") + ' Aggiunto il ' + formatItemDate(createdTs) + '</div></div>';
+    }
+    var acquiredTs = item.acquired || item.created;
+    if (!acquiredTs) return "";
+    var html = '<div class="item-dates"><div class="item-date">' + icon("calendar") + ' Acquisito il ' + formatItemDate(acquiredTs) + '</div>';
+    if (createdTs && formatItemDate(createdTs) !== formatItemDate(acquiredTs)) {
+      html += '<div class="item-date item-date-origin">' + icon("clock") + ' Aggiunto all\'app il ' + formatItemDate(createdTs) + '</div>';
+    }
+    return html + '</div>';
   }
 
   /* ============ gruppi ============ */
@@ -2164,7 +2175,7 @@
     if (isOwn) {
       html += '<label class="avail-toggle"><input type="checkbox" data-id="' + escapeHtml(item.id) + '" ' + (av ? "checked" : "") + '><span>' + (av ? "Disponibile" : "Non disponibile") + '</span></label>';
     }
-    html += renderItemDatesHtml(item);
+    html += renderItemDatesHtml(item, isOwn);
     html += '</div></div>';
     return html;
   }
@@ -2250,7 +2261,8 @@
     var availableOther = state.otherUserInventory.filter(isAvailable);
     var filteredOther = availableOther.filter(function (i) { return !search || i.name.toLowerCase().indexOf(search) !== -1; });
     var html = '<div class="page-header"><button type="button" data-action="back-to-community" class="btn-icon-left">' + icon("chevron-left") + ' Indietro</button>' +
-      '<h2 class="user-page-name clickable" data-action="open-chat" data-username="' + escapeHtml(state.selectedUser) + '" title="Apri chat con ' + escapeHtml(state.selectedUser) + '">' + escapeHtml(state.selectedUser) + '</h2>' + friendBtnHtml + '</div>';
+      '<div class="user-page-title">' + userAvatarHtml(state.selectedUser, "user-page-avatar") +
+      '<h2 class="user-page-name clickable" data-action="open-chat" data-username="' + escapeHtml(state.selectedUser) + '" title="Apri chat con ' + escapeHtml(state.selectedUser) + '">' + escapeHtml(state.selectedUser) + '</h2></div>' + friendBtnHtml + '</div>';
     if (state.otherUserInventory.length === 0) {
       html += '<div class="empty-state"><p>Nessun oggetto disponibile.</p></div>';
     } else {
