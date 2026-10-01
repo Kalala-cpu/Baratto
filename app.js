@@ -2795,7 +2795,7 @@
       lastHeaderHtml = null;
       return;
     }
-    var FOCUS_PRESERVE_IDS = ["friend-username", "community-search", "inventory-search", "other-inventory-search", "history-search", "chat-input", "new-group-name"];
+    var FOCUS_PRESERVE_IDS = ["friend-username", "community-search", "inventory-search", "other-inventory-search", "history-search", "chat-input", "chat-search", "friends-search", "new-group-name"];
     var active = document.activeElement;
     var keepFocusId = (active && FOCUS_PRESERVE_IDS.indexOf(active.id) !== -1) ? active.id : null;
     var selStart = keepFocusId ? active.selectionStart : null, selEnd = keepFocusId ? active.selectionEnd : null;
