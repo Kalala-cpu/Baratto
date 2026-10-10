@@ -1774,3 +1774,18 @@ input { font-family: inherit; }
 .bet-hint { margin-top: 0.5rem; }
 .chat-trade-row em { color: var(--ink-soft); }
 button.photo-upload { background: none; font-family: inherit; }
+
+/* separatore di giorno nelle chat */
+.chat-date-row { display: flex; justify-content: center; margin: 0.6rem 0 0.2rem; }
+.chat-date-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--ink-soft);
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0.2rem 0.75rem;
+}
+
+/* carte dell'altro utente non selezionabili (modalita' scommessa) */
+.item-select.no-select { cursor: default; }

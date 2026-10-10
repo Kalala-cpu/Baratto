@@ -933,6 +933,7 @@
   var chatOlderMessages = [];
   var chatHasMoreOlder = false;
   var chatLoadingOlder = false;
+  var chatFirstSnapshot = true; /* true finche' non e' arrivato il primo caricamento della chat aperta */
   /* id univoco e stabile per la coppia di utenti, indipendente da chi apre la chat per primo */
   function chatIdFor(u1, u2) {
     return [String(u1 || "").toLowerCase(), String(u2 || "").toLowerCase()].sort().join("__");
@@ -973,16 +974,25 @@
     if (!path) return;
     chatLiveMessages = [];
     chatOlderMessages = [];
+    chatFirstSnapshot = true;
     chatHasMoreOlder = true; /* non sappiamo ancora se ce ne sono altri: lo scopriamo al primo "carica precedenti" */
     chatLoadingOlder = false;
     /* finestra live: sempre gli ultimi CHAT_PAGE messaggi, aggiornata in automatico */
     chatRef = fbDb.ref(path).orderByChild("created").limitToLast(CHAT_PAGE);
     chatRef.on("value", function (snap) {
+      var prevLastId = state.chatMessages.length ? state.chatMessages[state.chatMessages.length - 1].id : null;
+      var wasFirst = chatFirstSnapshot;
+      chatFirstSnapshot = false;
       chatLiveMessages = toArray(snap.val());
       rebuildChatMessages();
+      var lastMsg = state.chatMessages[state.chatMessages.length - 1];
+      var newOwn = !!lastMsg && lastMsg.id !== prevLastId && sameUser(lastMsg.from, state.currentUser);
       setState({ chatHasMoreOlder: chatHasMoreOlder });
       render();
-      scrollChatToBottom();
+      /* in fondo solo al primo caricamento o quando scrivo io: se sto rileggendo messaggi
+         piu' vecchi un messaggio in arrivo non deve portarmi via dalla mia posizione
+         (se ero gia' in fondo ci resto comunque: lo gestisce render()) */
+      if (wasFirst || newOwn) scrollChatToBottom();
     }, function (err) {
       setMessage(dbErrorMessage(err, "Errore chat: " + err.message), "error");
     });
@@ -999,14 +1009,24 @@
     fbDb.ref(path).orderByChild("created").endBefore(oldest.created || 0, oldest.id).limitToLast(CHAT_PAGE).once("value").then(function (snap) {
       var older = toArray(snap.val());
       chatHasMoreOlder = older.length === CHAT_PAGE;
+      /* render() ricostruisce il DOM: il vecchio contenitore non esiste piu' dopo, quindi
+         invece di ripristinare un'altezza sul vecchio elemento ci ancoriamo al messaggio piu'
+         vecchio gia' visibile (data-msg-id) e dopo il render lo rimettiamo alla stessa
+         posizione sullo schermo, cosi' la vista non salta in cima ai nuovi messaggi. */
       var container = document.getElementById("chat-messages");
-      var prevHeight = container ? container.scrollHeight : 0;
+      var anchorSel = '[data-msg-id="' + oldest.id + '"]';
+      var anchorEl = container ? container.querySelector(anchorSel) : null;
+      var anchorOffset = (container && anchorEl) ? anchorEl.getBoundingClientRect().top - container.getBoundingClientRect().top : 0;
       chatOlderMessages = older.concat(chatOlderMessages);
       rebuildChatMessages();
       chatLoadingOlder = false;
       setState({ chatHasMoreOlder: chatHasMoreOlder, chatLoadingOlder: false });
       render();
-      if (container) { container.scrollTop = container.scrollHeight - prevHeight; }
+      var newContainer = document.getElementById("chat-messages");
+      var newAnchor = newContainer ? newContainer.querySelector(anchorSel) : null;
+      if (newContainer && newAnchor) {
+        newContainer.scrollTop += (newAnchor.getBoundingClientRect().top - newContainer.getBoundingClientRect().top) - anchorOffset;
+      }
     }).catch(function (err) {
       chatLoadingOlder = false;
       setState({ chatLoadingOlder: false });
@@ -1477,6 +1497,25 @@
     var mm = d.getMinutes().toString().padStart(2, "0");
     return hh + ":" + mm;
   }
+  function dayKeyOf(ts) {
+    if (!ts) return "";
+    var d = new Date(ts);
+    return d.getFullYear() + "-" + d.getMonth() + "-" + d.getDate();
+  }
+  /* "Oggi" / "Ieri" / "10 ott 2026": etichetta del separatore di giorno in chat */
+  function formatChatDay(ts) {
+    var yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    if (dayKeyOf(ts) === dayKeyOf(Date.now())) return "Oggi";
+    if (dayKeyOf(ts) === dayKeyOf(yesterday.getTime())) return "Ieri";
+    var d = new Date(ts);
+    return d.getDate() + " " + ITEM_DATE_MONTHS[d.getMonth()] + " " + d.getFullYear();
+  }
+  function formatChatFullDate(ts) {
+    if (!ts) return "";
+    var d = new Date(ts);
+    return d.getDate() + " " + ITEM_DATE_MONTHS[d.getMonth()] + " " + d.getFullYear() + " alle " + formatChatTime(ts);
+  }
   /* mm:ss per la durata di un messaggio vocale (registrazione in corso o gia' inviato) */
   function formatRecordingTime(totalSeconds) {
     var s = Math.max(0, Math.floor(totalSeconds || 0));
@@ -1621,7 +1660,9 @@
     if (!raw) return null;
     var n = parseInt(raw, 10);
     if (!n || n <= 0) return null;
-    return raw.slice(-1) === "h" ? n * 60 * 60 * 1000 : n * 24 * 60 * 60 * 1000;
+    var unit = raw.slice(-1);
+    if (unit === "m") return n * 60 * 1000;
+    return unit === "h" ? n * 60 * 60 * 1000 : n * 24 * 60 * 60 * 1000;
   }
   function computeTradeExpiry() {
     var ms = durationMs(state.tradeDuration || "");
@@ -1639,6 +1680,7 @@
   var BET_RESPONSE_MS = 24 * 60 * 60 * 1000;
   function describeDuration(ms) {
     ms = ms || BET_RESPONSE_MS;
+    if (ms < 3600000) { var min = Math.round(ms / 60000); return min + (min === 1 ? " minuto" : " minuti"); }
     var h = Math.round(ms / 3600000);
     if (h >= 24 && h % 24 === 0) { var d = h / 24; return d + (d === 1 ? " giorno" : " giorni"); }
     return h + (h === 1 ? " ora" : " ore");
@@ -2365,7 +2407,7 @@
     var bet = !!state.tradeIsBet;
     var opts = [
       ["", "Nessuna scadenza"],
-      ["1h", "1 ora"], ["3h", "3 ore"], ["6h", "6 ore"], ["12h", "12 ore"],
+      ["5m", "5 minuti"], ["1h", "1 ora"], ["3h", "3 ore"], ["6h", "6 ore"], ["12h", "12 ore"],
       ["1", "24 ore"], ["3", "3 giorni"], ["7", "7 giorni"], ["14", "14 giorni"], ["30", "30 giorni"]
     ];
     /* una scommessa ha sempre un tempo prima del sorteggio: niente "nessuna scadenza" */
@@ -2587,7 +2629,9 @@
       var otherLimit = state.otherInventoryRenderLimit || INVENTORY_PAGE;
       var visibleOther = filteredOther.slice(0, otherLimit);
       html += '<div class="items-grid">' + visibleOther.map(function (item) {
-        var sel = state.wantIds.indexOf(item.id) !== -1;
+        /* in una scommessa non si chiede nulla all'altro utente: le sue carte non si selezionano */
+        var betMode = state.showTradeBuilder && state.tradeIsBet;
+        var sel = !betMode && state.wantIds.indexOf(item.id) !== -1;
         var photos = itemPhotos(item);
         var firstPhoto = photos[0];
         var thumbHtml = photos.length
@@ -2595,9 +2639,9 @@
               ? '<video src="' + escapeHtml(photoUrl(firstPhoto)) + '" class="item-thumb-video" muted playsinline preload="metadata"></video>'
               : '<img src="' + escapeHtml(photoUrl(firstPhoto)) + '" alt=""/>')
           : "";
-        return '<div class="item-card ' + (sel ? "selected" : "") + '"><div class="item-select" data-action="toggle-want" data-id="' + escapeHtml(item.id) + '">' +
+        return '<div class="item-card ' + (sel ? "selected" : "") + '"><div class="item-select' + (betMode ? " no-select" : "") + '"' + (betMode ? "" : ' data-action="toggle-want" data-id="' + escapeHtml(item.id) + '"') + '>' +
           (photos.length ? '<div class="item-photo">' + thumbHtml + '</div>' : '<div class="item-photo-empty">' + icon("package") + '</div>') +
-          '<div class="select-check">' + icon("check") + '</div>' +
+          (betMode ? '' : '<div class="select-check">' + icon("check") + '</div>') +
           '</div><div class="item-info"><h3>' + escapeHtml(item.name) + '</h3>' + renderItemDatesHtml(item) + '</div></div>';
       }).join("") + '</div>';
       if (filteredOther.length === 0) { html += '<div class="empty-state"><p>Nessun risultato.</p></div>'; }
@@ -2760,18 +2804,24 @@
     if (!state.chatMessages.length) {
       html += '<div class="empty-state"><p>Nessun messaggio ancora. Scrivi il primo!</p></div>';
     } else {
+      var prevDayKey = "";
       html += state.chatMessages.map(function (m) {
+        var dk = dayKeyOf(m.created), dayHtml = "";
+        if (dk && dk !== prevDayKey) {
+          prevDayKey = dk;
+          dayHtml = '<div class="chat-date-row"><span class="chat-date-label">' + escapeHtml(formatChatDay(m.created)) + '</span></div>';
+        }
         /* i messaggi di sistema (esito di uno scambio, o l'uscita di qualcuno dal gruppo)
            sono centrati e senza mittente/orario, per distinguerli dai messaggi normali */
-        if (m.type === "system") { return '<div class="chat-system-row">' + renderChatMessageContent(m) + '</div>'; }
+        if (m.type === "system") { return dayHtml + '<div class="chat-system-row" data-msg-id="' + escapeHtml(m.id) + '">' + renderChatMessageContent(m) + '</div>'; }
         var own = sameUser(m.from, state.currentUser);
         var showSender = isGroup && !own;
-        return '<div class="chat-bubble-row ' + (own ? "own" : "") + (showSender ? " has-avatar" : "") + '">' +
+        return dayHtml + '<div class="chat-bubble-row ' + (own ? "own" : "") + (showSender ? " has-avatar" : "") + '" data-msg-id="' + escapeHtml(m.id) + '">' +
           (showSender ? userAvatarHtml(m.from, "chat-bubble-avatar") : '') +
           '<div class="chat-bubble ' + ((m.type === "image" || m.type === "video") ? "chat-bubble-has-media" : "") + '">' +
           (showSender ? '<div class="chat-bubble-sender clickable" data-action="open-user" data-username="' + escapeHtml(m.from) + '" title="Vai all\'inventario di ' + escapeHtml(m.from) + '">' + escapeHtml(m.from) + '</div>' : '') +
           renderChatMessageContent(m) +
-          '<div class="chat-bubble-time">' + formatChatTime(m.created) + '</div>' +
+          '<div class="chat-bubble-time" title="' + escapeHtml(formatChatFullDate(m.created)) + '">' + formatChatTime(m.created) + '</div>' +
           '</div></div>';
       }).join("");
     }
@@ -3273,7 +3323,7 @@
     else if (e.target && e.target.id === "history-date-from") { state.historyDateFrom = e.target.value; state.historyLimit = HISTORY_PAGE; updateHistory(); }
     else if (e.target && e.target.id === "history-date-to") { state.historyDateTo = e.target.value; state.historyLimit = HISTORY_PAGE; updateHistory(); }
     else if (e.target && e.target.id === "trade-duration") state.tradeDuration = e.target.value;
-    else if (e.target && e.target.id === "trade-is-bet") { state.tradeIsBet = e.target.checked; render(); }
+    else if (e.target && e.target.id === "trade-is-bet") { state.tradeIsBet = e.target.checked; if (state.tradeIsBet) state.wantIds = []; render(); }
   });
 
   document.addEventListener("input", function (e) {
