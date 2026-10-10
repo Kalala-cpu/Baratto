@@ -231,7 +231,7 @@
     chatHasMoreOlder: false,
     chatLoadingOlder: false,
     showDeleteAccountConfirm: false,
-    tradeDuration: "",
+    tradeDuration: "", tradeIsBet: false, showBetAccept: null, betCounterIds: [],
     historyUserFilter: "",
     historyDateFrom: "",
     historyDateTo: "",
@@ -269,7 +269,11 @@
     if (!files.length) return;
     /* reset the input so the same file(s) can be selected again later */
     e.target.value = "";
-    var isEditing = e.target.id === "photo-input-edit";
+    addItemPhotoFiles(files, /edit$/.test(e.target.id));
+  }
+  /* aggiunge file (scelti dalla galleria o scattati con la fotocamera) alle foto della card
+     in aggiunta (isEditing false) o in modifica (isEditing true) */
+  function addItemPhotoFiles(files, isEditing) {
     var targetPhotos = isEditing ? state.editItemPhotos : state.newItemPhotos;
     var remaining = MAX_ITEM_PHOTOS - targetPhotos.length;
     if (remaining <= 0) { setMessage("Massimo " + MAX_ITEM_PHOTOS + " foto per oggetto.", "error"); return; }
@@ -321,6 +325,7 @@
     e.preventDefault();
     var name = (state.newItemName || "").trim();
     if (!name) { setMessage("Inserisci il nome dell'oggetto.", "error"); return; }
+    if (!state.newItemPhotos.length) { setMessage("Aggiungi almeno una foto o un video: una card non può restare senza immagini.", "error"); return; }
     /* il modale si chiude solo in caso di successo: prima veniva chiuso subito, quindi
        se il salvataggio falliva (es. permesso negato, connessione assente) il nome e le
        foto gia' inserite andavano persi senza che l'utente potesse riprovare */
@@ -341,6 +346,7 @@
     e.preventDefault();
     var name = (state.editItemName || "").trim();
     if (!name) { setMessage("Inserisci il nome dell'oggetto.", "error"); return; }
+    if (!state.editItemPhotos.length) { setMessage("Aggiungi almeno una foto o un video: una card non può restare senza immagini.", "error"); return; }
     var editId = state.editItemId;
     updateInventory(state.currentUser.toLowerCase(), function (inv) {
       var idx = findItemIndexById(editId, inv);
@@ -438,6 +444,7 @@
 
   /* ============ delete item ============ */
   function deleteItem(id) {
+    if (myStakedIds().indexOf(id) !== -1) { setMessage("Questa carta è in una scommessa in corso: non puoi eliminarla.", "error"); return; }
     if (!confirm("Eliminare questo oggetto?")) return;
     updateInventory(state.currentUser.toLowerCase(), function (inv) {
       var idx = findItemIndexById(id, inv);
@@ -534,6 +541,7 @@
       });
       setState({ allTrades: all, history: all });
       updateHistory();
+      checkBetDraws();
     }).catch(function (err) { setMessage(dbErrorMessage(err, "Errore scambi: " + err.message), "error"); });
   }
   /* carica sia gli amici confermati (users/{u}/friends) sia le richieste pendenti
@@ -714,7 +722,7 @@
         pendingChatMedia: null,
         chatMediaSending: false,
         showDeleteAccountConfirm: false,
-        tradeDuration: "",
+        tradeDuration: "", tradeIsBet: false, showBetAccept: null, betCounterIds: [],
         historyUserFilter: "",
         historyDateFrom: "",
         historyDateTo: ""
@@ -1290,7 +1298,9 @@
      stream dentro la pagina ridisegnata a ogni aggiornamento resterebbe nero. */
   var cameraOverlay = null;
   var cameraStream = null;
+  var cameraTarget = null; /* "chat" | "item" | "item-edit": dove va a finire la foto scattata */
   function closeCameraOverlay() {
+    cameraTarget = null;
     if (cameraStream) { cameraStream.getTracks().forEach(function (t) { t.stop(); }); cameraStream = null; }
     if (cameraOverlay && cameraOverlay.parentNode) { cameraOverlay.parentNode.removeChild(cameraOverlay); }
     cameraOverlay = null;
@@ -1302,15 +1312,19 @@
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
     canvas.getContext("2d").drawImage(video, 0, 0);
+    var target = cameraTarget || "chat";
     canvas.toBlob(function (blob) {
       closeCameraOverlay();
       if (!blob) { setMessage("Non sono riuscito a scattare la foto.", "error"); return; }
-      setPendingChatFile(new File([blob], "foto.jpg", { type: "image/jpeg" }), "image");
+      var shot = new File([blob], "foto.jpg", { type: "image/jpeg" });
+      if (target === "chat") setPendingChatFile(shot, "image");
+      else addItemPhotoFiles([shot], target === "item-edit");
     }, "image/jpeg", 0.9);
   }
-  function openCameraCapture() {
-    if (cameraOverlay || state.voiceRecording) return;
-    var nativeInput = document.getElementById("chat-camera-input");
+  function openCameraCapture(target) {
+    target = target || "chat";
+    if (cameraOverlay || (target === "chat" && state.voiceRecording)) return;
+    var nativeInput = document.getElementById(target === "item" ? "photo-camera-input" : target === "item-edit" ? "photo-camera-input-edit" : "chat-camera-input");
     var touchDevice = window.matchMedia && window.matchMedia("(pointer: coarse)").matches;
     if (touchDevice || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       if (nativeInput) nativeInput.click();
@@ -1318,6 +1332,7 @@
     }
     navigator.mediaDevices.getUserMedia({ video: true, audio: false }).then(function (stream) {
       cameraStream = stream;
+      cameraTarget = target;
       var el = document.createElement("div");
       el.className = "camera-overlay";
       el.innerHTML = '<video class="camera-video" autoplay playsinline muted></video>' +
@@ -1601,15 +1616,46 @@
      ("" = nessuna scadenza, di default), un numero di giorni come stringa ("1","3",...),
      oppure un numero di ORE seguito da "h" ("1h","6h",...) per scadenze piu' brevi.
      Restituisce il timestamp di scadenza, o null se la proposta non scade mai. */
-  function computeTradeExpiry() {
-    var raw = state.tradeDuration || "";
+  /* durata scelta nel form -> millisecondi (null = nessuna durata) */
+  function durationMs(raw) {
     if (!raw) return null;
-    if (raw.slice(-1) === "h") {
-      var hours = parseInt(raw, 10);
-      return (hours && hours > 0) ? Date.now() + hours * 60 * 60 * 1000 : null;
-    }
-    var days = parseInt(raw, 10);
-    return (days && days > 0) ? Date.now() + days * 24 * 60 * 60 * 1000 : null;
+    var n = parseInt(raw, 10);
+    if (!n || n <= 0) return null;
+    return raw.slice(-1) === "h" ? n * 60 * 60 * 1000 : n * 24 * 60 * 60 * 1000;
+  }
+  function computeTradeExpiry() {
+    var ms = durationMs(state.tradeDuration || "");
+    return ms ? Date.now() + ms : null;
+  }
+  /* ===== scommesse =====
+     Una scommessa e' uno scambio con bet:true. Ciclo di vita (betStatus):
+     "awaiting" -> chi l'ha proposta ha messo le sue carte; l'altro ha BET_RESPONSE_MS (24h,
+        vedi expiresAt) per rifiutare o per aggiungere le proprie carte e accettare.
+     "locked"   -> accettata con le carte di entrambi: si aspetta betDelayMs (la durata scelta
+        nel form), cioe' fino a drawAt.
+     "drawn"    -> passato drawAt un client (uno qualunque dei due) estrae il vincitore con una
+        transazione (una sola estrazione possibile) e salva betWinner.
+     "settled"  -> tutte le carte sono passate al vincitore (accepted:true). */
+  var BET_RESPONSE_MS = 24 * 60 * 60 * 1000;
+  function describeDuration(ms) {
+    ms = ms || BET_RESPONSE_MS;
+    var h = Math.round(ms / 3600000);
+    if (h >= 24 && h % 24 === 0) { var d = h / 24; return d + (d === 1 ? " giorno" : " giorni"); }
+    return h + (h === 1 ? " ora" : " ore");
+  }
+  function randomBool() {
+    try { var a = new Uint8Array(1); crypto.getRandomValues(a); return (a[0] & 1) === 1; }
+    catch (err) { return Math.random() < 0.5; }
+  }
+  /* id delle mie carte gia' impegnate in una scommessa ancora aperta (escluso excludeTradeId) */
+  function myStakedIds(excludeTradeId) {
+    var ids = [];
+    (state.allTrades || []).forEach(function (t) {
+      if (!t || !t.bet || t.id === excludeTradeId || t.accepted || t.declined || t.cancelled || isTradeExpired(t)) return;
+      if (sameUser(t.fromUser || t.from, state.currentUser)) ids = ids.concat(toArray(t.offerIds));
+      else if (t.betStatus === "locked" || t.betStatus === "drawn") ids = ids.concat(toArray(t.counterIds));
+    });
+    return ids;
   }
   /* true se una proposta ha una scadenza, non e' ancora stata accettata/rifiutata,
      ed e' passata la scadenza */
@@ -1631,93 +1677,316 @@
      scadenza si nota subito e non solo dallo stato "In attesa"/"Scaduto". Ambra finche'
      il termine non e' passato, rosso una volta scaduta. */
   function renderTradeExpiryBadge(t, cssClass) {
+    if (t && t.bet && t.betStatus === "locked" && t.drawAt) {
+      return '<div class="' + cssClass + '">' + icon("clock") + ' Sorteggio il ' + formatTradeExpiry(t.drawAt) + '</div>';
+    }
     if (!t || !t.expiresAt) return "";
     var expired = isTradeExpired(t);
     var label = (expired ? "Scaduta il " : "Scade il ") + formatTradeExpiry(t.expiresAt);
     return '<div class="' + cssClass + (expired ? " is-expired" : "") + '">' + icon("clock") + ' ' + label + '</div>';
   }
 
+  /* stato mostrato per una proposta (classe CSS + etichetta), valido per scambi e scommesse */
+  function tradeStatusInfo(t) {
+    if (!t) return { cls: "pending", label: "In attesa" };
+    if (t.accepted) return { cls: "accepted", label: (t.bet && t.betWinner) ? "Vince " + t.betWinner : "Accettato" };
+    if (t.declined) return { cls: "declined", label: "Rifiutato" };
+    if (t.cancelled) return { cls: "cancelled", label: "Annullato" };
+    if (isTradeExpired(t)) return { cls: "expired", label: "Scaduto" };
+    if (t.bet) {
+      if (t.betStatus === "locked") return { cls: "pending", label: "Scommessa in corso" };
+      if (t.betStatus === "drawn") return { cls: "pending", label: "Sorteggio in corso" };
+      return { cls: "pending", label: "In attesa di risposta" };
+    }
+    return { cls: "pending", label: "In attesa" };
+  }
+  /* righe "puntata di X" di una scommessa; m e' il messaggio di chat (fallback se la proposta non e' caricata) */
+  function betRowsHtml(t, m) {
+    var fromName = (t && (t.fromUser || t.from)) || (m && m.from) || "";
+    var toName = (t && (t.toUser || t.to)) || "l'altro utente";
+    var offer = toArray((t && t.offerNames) || (m && m.offerNames)).map(escapeHtml).join(", ") || "—";
+    var counter = toArray(t && t.counterNames).map(escapeHtml).join(", ");
+    return '<div class="chat-trade-row"><span class="chat-trade-label">Puntata di ' + escapeHtml(fromName) + ':</span> ' + offer + '</div>' +
+      '<div class="chat-trade-row"><span class="chat-trade-label">Puntata di ' + escapeHtml(toName) + ':</span> ' + (counter || '<em>ancora nessuna carta</em>') + '</div>' +
+      '<div class="chat-sub">Chi vince il sorteggio (50/50) prende tutte le carte.</div>';
+  }
+  /* pulsanti azione di una proposta: usati sia nella card in chat sia nella tab Scambi */
+  function renderTradeButtons(t) {
+    if (!t || t.accepted || t.declined || t.cancelled) return "";
+    if (t.bet && (t.betStatus === "locked" || t.betStatus === "drawn")) return "";
+    var isSender = sameUser(t.fromUser || t.from, state.currentUser);
+    var isRecipient = sameUser(t.toUser || t.to, state.currentUser);
+    var id = escapeHtml(t.id), h = "";
+    if (isSender) {
+      h = '<button type="button" data-action="cancel-outgoing-trade" data-id="' + id + '" class="btn-ghost btn-sm">' + icon("x") + ' Annulla</button>';
+    } else if (isRecipient) {
+      if (isTradeExpired(t)) h = '<span class="pill-muted">Proposta scaduta</span>';
+      else if (t.bet) h = '<button type="button" data-action="open-bet-accept" data-id="' + id + '" class="btn-primary btn-sm">' + icon("star") + ' Partecipa</button>' +
+        '<button type="button" data-action="decline-trade" data-id="' + id + '" class="btn-ghost btn-sm">' + icon("x") + ' Rifiuta</button>';
+      else h = '<button type="button" data-action="accept-trade" data-id="' + id + '" class="btn-primary btn-sm">' + icon("check") + ' Accetta</button>' +
+        '<button type="button" data-action="decline-trade" data-id="' + id + '" class="btn-ghost btn-sm">' + icon("x") + ' Rifiuta</button>';
+    }
+    return h ? '<div class="trade-actions-inline">' + h + '</div>' : "";
+  }
+
+  /* ============ partecipare a una scommessa (chi la riceve) ============ */
+  function openBetAccept(tradeId) {
+    var t = getItemById(tradeId, state.allTrades);
+    if (!t || !t.bet) return;
+    setState({ showBetAccept: tradeId, betCounterIds: [] });
+    render();
+  }
+  function closeBetAccept() { setState({ showBetAccept: null, betCounterIds: [] }); render(); }
+  function toggleBetCounter(id) {
+    var i = state.betCounterIds.indexOf(id);
+    if (i >= 0) { state.betCounterIds.splice(i, 1); render(); return; }
+    if (id === profileItemId(state.inventory)) {
+      var ok = confirm("Questo oggetto è la tua immagine profilo attuale: se perdi la scommessa l'immagine profilo passerà automaticamente al prossimo oggetto in inventario. Continuare?");
+      if (!ok) return;
+    }
+    state.betCounterIds.push(id);
+    render();
+  }
+  function renderBetAcceptModal() {
+    var t = getItemById(state.showBetAccept, state.allTrades);
+    if (!t) return "";
+    var fromName = t.fromUser || t.from || "";
+    return '<div id="bet-accept-overlay" class="modal-overlay" data-action="close-bet-accept"></div>' +
+      '<div class="modal">' +
+      '<div class="modal-header"><h2>Partecipa alla scommessa</h2><button type="button" data-action="close-bet-accept" class="btn-close">' + icon("x") + '</button></div>' +
+      '<div class="modal-body">' +
+      '<div class="chat-trade-row"><span class="chat-trade-label">Puntata di ' + escapeHtml(fromName) + ':</span> ' + (toArray(t.offerNames).map(escapeHtml).join(", ") || "—") + '</div>' +
+      '<p class="trade-section-hint" style="margin-top:0.6rem;">Scegli le carte che metti in palio contro le sue. Dopo la tua accettazione il sorteggio (50/50) avverrà dopo ' + describeDuration(t.betDelayMs) + ': chi vince prende tutte le carte, sue e tue. Una volta accettata non si può annullare.</p>' +
+      '<div class="trade-section"><h3>Le mie carte</h3><div class="items-list">' +
+      (state.inventory.length ? state.inventory.map(function (item) {
+        return renderTradeItemCard(item, state.betCounterIds.indexOf(item.id) !== -1, "toggle-bet-counter", true);
+      }).join("") : '<p class="chat-sub">Non hai carte da mettere in palio.</p>') +
+      '</div></div></div>' +
+      '<div class="modal-footer"><div class="trade-actions"><button type="button" data-action="close-bet-accept" class="btn-ghost">Annulla</button><button type="button" data-action="confirm-bet-accept" class="btn-primary">' + icon("star") + ' Accetta la scommessa</button></div></div>' +
+      '</div>';
+  }
+  function confirmBetAccept() {
+    var tradeId = state.showBetAccept;
+    var trade = getItemById(tradeId, state.allTrades);
+    var ids = state.betCounterIds.slice();
+    if (!trade || tradeInFlight[tradeId]) return;
+    if (!ids.length) { setMessage("Scegli almeno una carta da mettere in palio.", "error"); return; }
+    if (!idsStillExist(ids, state.inventory)) { setMessage("Alcune carte scelte non esistono più. Aggiorna la selezione.", "error"); return; }
+    var staked = myStakedIds(tradeId);
+    if (ids.some(function (id) { return staked.indexOf(id) !== -1; })) { setMessage("Alcune carte scelte sono già in un'altra scommessa in corso.", "error"); return; }
+    var names = namesForIds(ids, state.inventory);
+    var fromU = (trade.fromUser || trade.from || "").toLowerCase();
+    var lockedAt = null;
+    tradeInFlight[tradeId] = true;
+    getInventory(fromU).then(function (fromInv) {
+      if (!idsStillExist(toArray(trade.offerIds), fromInv)) throw new Error("Le carte messe in palio dall'altro utente non esistono più.");
+      return fbDb.ref("trades/" + tradeId).transaction(function (cur) {
+        if (cur === null) return cur;
+        if (!cur.bet || cur.betStatus !== "awaiting" || cur.accepted || cur.declined || cur.cancelled) return;
+        if (cur.expiresAt && Date.now() > cur.expiresAt) return;
+        lockedAt = Date.now();
+        cur.counterIds = ids;
+        cur.counterNames = names;
+        cur.betStatus = "locked";
+        cur.lockedAt = lockedAt;
+        cur.drawAt = lockedAt + (cur.betDelayMs || BET_RESPONSE_MS);
+        cur.expiresAt = null;
+        return cur;
+      });
+    }).then(function (res) {
+      if (!res.committed) { setMessage("Questa scommessa non è più disponibile (scaduta o già gestita).", "error"); loadTrades(); return; }
+      var val = res.snapshot.val();
+      setState({ showBetAccept: null, betCounterIds: [] });
+      setMessage("Scommessa accettata! Il sorteggio avverrà il " + formatTradeExpiry(val.drawAt) + ".", "success");
+      sendTradeSystemMessage(val, "Scommessa accettata: il sorteggio avverrà il " + formatTradeExpiry(val.drawAt) + ".");
+      loadTrades();
+    }).catch(function (err) {
+      setMessage(dbErrorMessage(err, "Errore: " + err.message), "error");
+    }).then(function () { delete tradeInFlight[tradeId]; });
+  }
+
+  /* ============ sorteggio e consegna delle carte ============
+     Puo' farlo il client di uno qualunque dei due partecipanti, appena aperto/attivo dopo
+     drawAt (controllo ogni 30s e a ogni caricamento scambi, vedi checkBetDraws).
+     1) l'estrazione e' una transazione sul nodo dello scambio: solo la prima ha effetto,
+        quindi non possono esserci due esiti diversi;
+     2) la consegna e' IDEMPOTENTE (prima si aggiungono le carte al vincitore, poi si tolgono
+        al perdente, cercando ogni carta in entrambi gli inventari): se un client si chiude a
+        meta', un altro la completa senza duplicare ne' perdere carte. */
+  function runBet(tradeId) {
+    if (tradeInFlight[tradeId]) return;
+    tradeInFlight[tradeId] = true;
+    fbDb.ref("trades/" + tradeId).transaction(function (cur) {
+      if (cur === null) return cur;
+      if (!cur.bet || cur.betStatus !== "locked" || Date.now() < cur.drawAt) return;
+      cur.betWinner = randomBool() ? (cur.fromUser || cur.from) : (cur.toUser || cur.to);
+      cur.betStatus = "drawn";
+      cur.betDrawnAt = Date.now();
+      return cur;
+    }).then(function () {
+      return dbGet("trades/" + tradeId);
+    }).then(function (trade) {
+      if (trade && trade.bet && trade.betStatus === "drawn" && !trade.betSettled) return settleBet(trade);
+    }).catch(function (err) {
+      setMessage(dbErrorMessage(err, "Errore scommessa: " + err.message), "error");
+    }).then(function () { delete tradeInFlight[tradeId]; });
+  }
+  function settleBet(trade) {
+    var fromName = trade.fromUser || trade.from, toName = trade.toUser || trade.to;
+    var fromU = fromName.toLowerCase(), toU = toName.toLowerCase();
+    var allIds = toArray(trade.offerIds).concat(toArray(trade.counterIds));
+    var winnerU = sameUser(trade.betWinner, fromName) ? fromU : toU;
+    var loserU = winnerU === fromU ? toU : fromU;
+    return Promise.all([getInventory(winnerU), getInventory(loserU)]).then(function (res) {
+      var winnerInv = res[0], loserInv = res[1];
+      var moving = [], missing = false;
+      allIds.forEach(function (id) {
+        if (getItemById(id, winnerInv)) return; /* gia' del vincitore (sua puntata, o gia' consegnata) */
+        var it = getItemById(id, loserInv);
+        if (it) moving.push(it); else missing = true;
+      });
+      if (missing) return voidBet(trade, "Scommessa annullata: alcune carte in palio non esistono più.");
+      var ts = Date.now();
+      moving.forEach(function (it) {
+        if (!it.created) it.created = itemCreatedTs(it) || it.acquired || ts;
+        it.acquired = ts;
+      });
+      return updateInventory(winnerU, function (inv) {
+        moving.forEach(function (it) { if (!getItemById(it.id, inv)) inv.push(it); });
+        return inv;
+      }).then(function () {
+        return updateInventory(loserU, function (inv) {
+          return inv.filter(function (it) { return allIds.indexOf(it.id) === -1; });
+        });
+      }).then(function () {
+        return fbDb.ref("trades/" + trade.id).transaction(function (cur) {
+          if (cur === null) return cur;
+          if (cur.betSettled) return;
+          cur.betSettled = true;
+          cur.accepted = true;
+          cur.declined = false;
+          cur.betStatus = "settled";
+          return cur;
+        });
+      }).then(function (r) {
+        if (!r.committed) return;
+        var won = sameUser(trade.betWinner, state.currentUser);
+        sendTradeSystemMessage(trade, "Scommessa conclusa: " + trade.betWinner + " vince tutte le carte in palio!");
+        setMessage(won ? "Hai vinto la scommessa! Le carte in palio sono nel tuo inventario." : "Hai perso la scommessa: le tue carte in palio sono passate a " + trade.betWinner + ".", won ? "success" : "error");
+        loadTrades(); loadInventory(); loadCommunity();
+      });
+    });
+  }
+  function voidBet(trade, text) {
+    return fbDb.ref("trades/" + trade.id).transaction(function (cur) {
+      if (cur === null) return cur;
+      if (cur.accepted || cur.declined || cur.cancelled) return;
+      cur.cancelled = true;
+      cur.betStatus = "void";
+      return cur;
+    }).then(function (r) {
+      if (!r.committed) return;
+      sendTradeSystemMessage(trade, text);
+      setMessage(text, "error");
+      loadTrades(); loadInventory();
+    });
+  }
+  function checkBetDraws() {
+    if (!state.currentUser) return;
+    (state.allTrades || []).forEach(function (t) {
+      if (!t || !t.bet || t.accepted || t.declined || t.cancelled) return;
+      if (t.betStatus === "locked" && t.drawAt && Date.now() >= t.drawAt) runBet(t.id);
+      else if (t.betStatus === "drawn") runBet(t.id);
+    });
+  }
+
   /* proporre uno scambio dall'inventario di un utente (tab Community, non dalla chat):
      la proposta finisce comunque come messaggio nella chat con quella persona, cosi' la
      notifica (e le azioni Accetta/Rifiuta, con stato aggiornato in tempo reale) si vedono
      sempre in chat, indipendentemente da dove e' stato avviato lo scambio */
-  function submitTrade() {
-    if (!state.selectedUser) return;
-    if (!state.wantIds.length || !state.offerIds.length) { setMessage("Seleziona cosa vuoi e cosa offri.", "error"); return; }
-    if (!idsStillAvailable(state.wantIds, state.otherUserInventory) || !idsStillExist(state.offerIds, state.inventory)) {
-      setMessage("Alcuni oggetti selezionati non sono più disponibili. Aggiorna la selezione.", "error");
-      return;
+  /* costruisce la proposta (scambio normale o scommessa) dallo stato del form; se qualcosa
+     non va mostra l'errore e restituisce null */
+  function buildTradeFromForm(toUser, otherInv) {
+    var isBet = !!state.tradeIsBet;
+    if (isBet) {
+      if (!state.offerIds.length) { setMessage("Scegli le carte da mettere in palio.", "error"); return null; }
+    } else if (!state.wantIds.length || !state.offerIds.length) {
+      setMessage("Seleziona cosa vuoi e cosa offri.", "error"); return null;
     }
-    var wantNames = namesForIds(state.wantIds, state.otherUserInventory);
-    var offerNames = namesForIds(state.offerIds, state.inventory);
+    if ((!isBet && !idsStillAvailable(state.wantIds, otherInv)) || !idsStillExist(state.offerIds, state.inventory)) {
+      setMessage("Alcuni oggetti selezionati non sono più disponibili. Aggiorna la selezione.", "error");
+      return null;
+    }
+    var staked = myStakedIds();
+    if (state.offerIds.some(function (id) { return staked.indexOf(id) !== -1; })) {
+      setMessage("Alcune carte scelte sono già in una scommessa in corso.", "error");
+      return null;
+    }
+    var now = Date.now();
     var trade = {
       id: genId(),
       /* field names must match the DB rules: fromUser / toUser (come friendRequests) */
       fromUser: state.currentUser,
-      toUser: state.selectedUser,
-      wantIds: state.wantIds,
+      toUser: toUser,
+      wantIds: isBet ? [] : state.wantIds,
       offerIds: state.offerIds,
-      wantNames: wantNames,
-      offerNames: offerNames,
-      created: Date.now(),
-      expiresAt: computeTradeExpiry(),
+      wantNames: isBet ? [] : namesForIds(state.wantIds, otherInv),
+      offerNames: namesForIds(state.offerIds, state.inventory),
+      created: now,
+      /* scommessa: l'altro ha 24h per rispondere; scambio normale: durata scelta (o nessuna) */
+      expiresAt: isBet ? now + BET_RESPONSE_MS : computeTradeExpiry(),
       accepted: false,
       declined: false
     };
+    if (isBet) {
+      trade.bet = true;
+      trade.betStatus = "awaiting";
+      trade.betDelayMs = durationMs(state.tradeDuration) || BET_RESPONSE_MS;
+    }
+    return trade;
+  }
+  function tradeChatMessage(trade) {
+    var msg = { id: genId(), from: state.currentUser, type: "trade", tradeId: trade.id, wantNames: trade.wantNames, offerNames: trade.offerNames, created: Date.now() };
+    if (trade.bet) msg.bet = true;
+    return msg;
+  }
+  function submitTrade() {
+    if (!state.selectedUser) return;
+    var trade = buildTradeFromForm(state.selectedUser, state.otherUserInventory);
+    if (!trade) return;
     var chatPath = "chats/" + chatIdFor(state.currentUser, state.selectedUser) + "/messages";
     dbSet("trades/" + trade.id, trade).then(function () {
-      setState({ showTradeBuilder: false, wantIds: [], offerIds: [], tradeDuration: "" });
-      setMessage("Scambio proposto!", "success");
+      setState({ showTradeBuilder: false, wantIds: [], offerIds: [], tradeDuration: "", tradeIsBet: false });
+      setMessage(trade.bet ? "Scommessa proposta!" : "Scambio proposto!", "success");
       loadTrades();
-      var msgId = genId();
-      var msg = { id: msgId, from: state.currentUser, type: "trade", tradeId: trade.id, wantNames: wantNames, offerNames: offerNames, created: Date.now() };
-      return dbSet(chatPath + "/" + msgId, msg);
+      var msg = tradeChatMessage(trade);
+      return dbSet(chatPath + "/" + msg.id, msg);
     }).catch(function (err) { setMessage("Errore: " + err.message, "error"); });
   }
 
   /* ============ proposta di scambio dalla chat ============ */
   function openChatTradeBuilder() {
     if (!state.chatTarget || state.chatTarget.type !== "friend") return;
-    setState({ showChatTradeBuilder: true, wantIds: [], offerIds: [], chatOtherInventory: [], tradeDuration: "" });
+    setState({ showChatTradeBuilder: true, wantIds: [], offerIds: [], chatOtherInventory: [], tradeDuration: "", tradeIsBet: false, showBetAccept: null, betCounterIds: [] });
     render();
     getInventory(state.chatTarget.id.toLowerCase()).then(function (inv) {
       setState({ chatOtherInventory: inv });
       render();
     });
   }
-  function closeChatTradeBuilder() { setState({ showChatTradeBuilder: false, wantIds: [], offerIds: [], tradeDuration: "" }); render(); }
+  function closeChatTradeBuilder() { setState({ showChatTradeBuilder: false, wantIds: [], offerIds: [], tradeDuration: "", tradeIsBet: false, showBetAccept: null, betCounterIds: [] }); render(); }
   function submitChatTrade() {
     if (!state.chatTarget || state.chatTarget.type !== "friend") return;
-    if (!state.wantIds.length || !state.offerIds.length) { setMessage("Seleziona cosa vuoi e cosa offri.", "error"); return; }
-    if (!idsStillAvailable(state.wantIds, state.chatOtherInventory) || !idsStillExist(state.offerIds, state.inventory)) {
-      setMessage("Alcuni oggetti selezionati non sono più disponibili. Aggiorna la selezione.", "error");
-      return;
-    }
-    var wantNames = namesForIds(state.wantIds, state.chatOtherInventory);
-    var offerNames = namesForIds(state.offerIds, state.inventory);
-    var trade = {
-      id: genId(),
-      /* field names must match the DB rules: fromUser / toUser (come friendRequests) */
-      fromUser: state.currentUser,
-      toUser: state.chatTarget.id,
-      wantIds: state.wantIds,
-      offerIds: state.offerIds,
-      wantNames: wantNames,
-      offerNames: offerNames,
-      created: Date.now(),
-      expiresAt: computeTradeExpiry(),
-      accepted: false,
-      declined: false
-    };
+    var trade = buildTradeFromForm(state.chatTarget.id, state.chatOtherInventory);
+    if (!trade) return;
     var path = chatMessagesPath();
     dbSet("trades/" + trade.id, trade).then(function () {
-      setState({ showChatTradeBuilder: false, wantIds: [], offerIds: [], tradeDuration: "" });
-      setMessage("Scambio proposto!", "success");
+      setState({ showChatTradeBuilder: false, wantIds: [], offerIds: [], tradeDuration: "", tradeIsBet: false });
+      setMessage(trade.bet ? "Scommessa proposta!" : "Scambio proposto!", "success");
       loadTrades();
       if (path) {
-        var msgId = genId();
-        var msg = { id: msgId, from: state.currentUser, type: "trade", tradeId: trade.id, wantNames: wantNames, offerNames: offerNames, created: Date.now() };
-        return dbSet(path + "/" + msgId, msg);
+        var msg = tradeChatMessage(trade);
+        return dbSet(path + "/" + msg.id, msg);
       }
     }).catch(function (err) { setMessage("Errore: " + err.message, "error"); });
   }
@@ -1737,6 +2006,10 @@
         loadTrades();
         return null;
       }
+      if (trade.bet && (accept || trade.betStatus === "locked" || trade.betStatus === "drawn")) {
+        setMessage(accept ? "Per partecipare a una scommessa scegli le tue carte da mettere in palio." : "Una scommessa accettata non può più essere rifiutata.", "error");
+        return null;
+      }
       if (!accept) {
         trade.accepted = false;
         trade.declined = true;
@@ -1750,6 +2023,9 @@
       var toU = (trade.toUser || trade.to || "").toLowerCase();
       var wantIds = toArray(trade.wantIds); /* oggetti di toU che passano a fromU */
       var offerIds = toArray(trade.offerIds); /* oggetti di fromU che passano a toU */
+      if (myStakedIds().some(function (id) { return wantIds.indexOf(id) !== -1; })) {
+        throw new Error("Uno degli oggetti richiesti è in una scommessa in corso.");
+      }
       var fromMoved = false; /* true una volta che il primo trasferimento e' andato a buon fine */
       /* accettare uno scambio deve spostare fisicamente gli oggetti tra i due inventari,
          non solo segnare la proposta come accettata (vedi commento su "inventories" nelle
@@ -1815,6 +2091,10 @@
         loadTrades();
         return null;
       }
+      if (trade.bet && (trade.betStatus === "locked" || trade.betStatus === "drawn")) {
+        setMessage("Una scommessa accettata non può essere annullata.", "error");
+        return null;
+      }
       /* segniamo la proposta come annullata invece di cancellarla dal database (come
          gia' avviene per accettazione/rifiuto): se la rimuovessimo del tutto, la card
          di scambio gia' visibile in chat all'altra persona non avrebbe piu' modo di
@@ -1854,7 +2134,7 @@
   var tradesLiveRef = null;
   var knownTradeStatus = {};
   var tradesLiveFirstSnapshot = true;
-  function tradeStatusOf(t) { return t.accepted ? "accepted" : t.declined ? "declined" : t.cancelled ? "cancelled" : "pending"; }
+  function tradeStatusOf(t) { return t.accepted ? "accepted" : t.declined ? "declined" : t.cancelled ? "cancelled" : (t.bet ? "pending:" + (t.betStatus || "") : "pending"); }
   function attachTradesLiveWatch() {
     if (tradesLiveRef) return;
     tradesLiveRef = fbDb.ref("trades");
@@ -1871,6 +2151,7 @@
       var isFirstSnapshot = tradesLiveFirstSnapshot;
       tradesLiveFirstSnapshot = false;
       var justResolved = [];
+      var betLocked = [];
       var hasNewIncoming = false;
       mine.forEach(function (t) {
         var prev = knownTradeStatus[t.id];
@@ -1881,23 +2162,31 @@
              vedrebbe mai una nuova proposta ricevuta finche' non cambia tab manualmente */
           hasNewIncoming = true;
         }
-        if (prev === "pending" && cur !== "pending" && !tradeInFlight[t.id]) justResolved.push(t);
+        if (prev && prev.indexOf("pending") === 0 && cur.indexOf("pending") !== 0 && !tradeInFlight[t.id]) justResolved.push(t);
+        else if (prev && prev !== cur && cur === "pending:locked" && sameUser(t.fromUser || t.from, state.currentUser) && !tradeInFlight[t.id]) betLocked.push(t);
         knownTradeStatus[t.id] = cur;
       });
+      if (betLocked.length) {
+        loadTrades();
+        setMessage(betLocked.length === 1 ? "La tua scommessa è stata accettata: il sorteggio avverrà il " + formatTradeExpiry(betLocked[0].drawAt) + "." : betLocked.length + " tue scommesse sono state accettate.", "success");
+      }
       if (justResolved.length) {
         /* aggiorna sempre stato scambi/inventario, cosi' anche la card di scambio gia'
            aperta in chat (che legge lo stato da state.allTrades) mostra subito l'esito
            reale invece di restare bloccata su "In attesa", qualunque sia l'esito */
         loadTrades();
         loadInventory();
-        var accepted = justResolved.filter(function (t) { return t.accepted; }).length;
+        var accepted = justResolved.filter(function (t) { return t.accepted && !t.bet; }).length;
+        var betsDone = justResolved.filter(function (t) { return t.bet && t.accepted; });
         var declined = justResolved.filter(function (t) { return t.declined; }).length;
         var cancelled = justResolved.filter(function (t) { return t.cancelled; }).length;
         var parts = [];
+        betsDone.forEach(function (t) { parts.push("Scommessa conclusa: vince " + t.betWinner); });
         if (accepted) parts.push(accepted === 1 ? "Uno scambio è stato accettato" : accepted + " scambi sono stati accettati");
         if (declined) parts.push(declined === 1 ? "uno scambio è stato rifiutato" : declined + " scambi sono stati rifiutati");
         if (cancelled) parts.push(cancelled === 1 ? "una proposta è stata annullata" : cancelled + " proposte sono state annullate");
-        setMessage(parts.join(", ") + (accepted ? " — inventario aggiornato." : "."), accepted ? "success" : "error");
+        var okMsg = accepted || betsDone.length;
+        setMessage(parts.join(". ") + (okMsg ? " — inventario aggiornato." : "."), okMsg ? "success" : "error");
       } else if (hasNewIncoming) {
         /* nessun banner per non essere invadenti (la proposta compare gia' come card
            in chat, che ha il suo listener dedicato): qui basta aggiornare in silenzio
@@ -1927,6 +2216,7 @@
   var lastExpiredTradeIds = "";
   function checkTradeExpiries() {
     if (!state.currentUser) return;
+    checkBetDraws();
     var pending = (state.allTrades || []).filter(function (t) {
       return t && t.expiresAt && !t.accepted && !t.declined && !t.cancelled;
     });
@@ -1977,7 +2267,7 @@
       '<div class="modal-header"><h2>Aggiungi Oggetto</h2><button type="button" data-action="close-add-item" class="btn-close">' + icon("x") + '</button></div>' +
       '<form id="add-item-form" class="modal-body">' +
       '<div class="field"><label>Nome</label><input id="new-item-name" type="text" placeholder="Es: Bicicletta blu" value="' + escapeHtml(state.newItemName) + '"/></div>' +
-      '<div class="photos-section"><label>Foto (' + photos.length + '/' + MAX_ITEM_PHOTOS + ')</label>' +
+      '<div class="photos-section"><label>Foto * (' + photos.length + '/' + MAX_ITEM_PHOTOS + ')</label>' +
       '<div class="photos-grid">' + photos.map(function (p, idx) {
         var url = photoUrl(p), vid = isVideo(p), isCover = idx === 0;
         return '<div class="photo-thumb' + (isCover ? " is-cover" : "") + '">' +
@@ -1990,8 +2280,9 @@
           '</div>' +
           '<button type="button" data-action="remove-photo" data-index="' + idx + '" class="btn-remove-photo">' + icon("x") + '</button></div>';
       }).join("") +
-      (photos.length < MAX_ITEM_PHOTOS ? '<label class="photo-upload"><input type="file" id="photo-input" accept="image/*,video/*" multiple style="display:none"/>' + icon("image") + ' Carica foto/video</label>' : '') +
-      '</div>' + (photos.length > 1 ? '<p class="photos-hint">La prima foto è l\'immagine di copertina: usa le frecce per riordinarle.</p>' : '') + '</div>' +
+      (photos.length < MAX_ITEM_PHOTOS ? '<label class="photo-upload"><input type="file" id="photo-input" accept="image/*,video/*" multiple style="display:none"/>' + icon("image") + ' Carica foto/video</label>' +
+        '<button type="button" class="photo-upload" data-action="open-item-camera" data-edit="0">' + icon("camera") + ' Scatta foto</button><input type="file" id="photo-camera-input" accept="image/*" capture="environment" style="display:none"/>' : '') +
+      '</div>' + (photos.length === 0 ? '<p class="photos-hint">Serve almeno una foto o un video: una card non può restare senza immagini.</p>' : '') + (photos.length > 1 ? '<p class="photos-hint">La prima foto è l\'immagine di copertina: usa le frecce per riordinarle.</p>' : '') + '</div>' +
       '<div class="modal-footer"><button type="submit" class="btn-primary block">Aggiungi</button></div>' +
       '</form></div>';
   }
@@ -2004,7 +2295,7 @@
       '<div class="modal-header"><h2>Modifica Oggetto</h2><button type="button" data-action="close-edit-item" class="btn-close">' + icon("x") + '</button></div>' +
       '<form id="edit-item-form" class="modal-body">' +
       '<div class="field"><label>Nome</label><input id="edit-item-name" type="text" placeholder="Es: Bicicletta blu" value="' + escapeHtml(state.editItemName) + '"/></div>' +
-      '<div class="photos-section"><label>Foto (' + photos.length + '/' + MAX_ITEM_PHOTOS + ')</label>' +
+      '<div class="photos-section"><label>Foto * (' + photos.length + '/' + MAX_ITEM_PHOTOS + ')</label>' +
       '<div class="photos-grid">' + photos.map(function (p, idx) {
         var url = photoUrl(p), vid = isVideo(p), isCover = idx === 0;
         return '<div class="photo-thumb' + (isCover ? " is-cover" : "") + '">' +
@@ -2017,8 +2308,9 @@
           '</div>' +
           '<button type="button" data-action="remove-edit-photo" data-index="' + idx + '" class="btn-remove-photo">' + icon("x") + '</button></div>';
       }).join("") +
-      (photos.length < MAX_ITEM_PHOTOS ? '<label class="photo-upload"><input type="file" id="photo-input-edit" accept="image/*,video/*" multiple style="display:none"/>' + icon("image") + ' Carica foto/video</label>' : '') +
-      '</div>' + (photos.length > 1 ? '<p class="photos-hint">La prima foto è l\'immagine di copertina: usa le frecce per riordinarle.</p>' : '') + '</div>' +
+      (photos.length < MAX_ITEM_PHOTOS ? '<label class="photo-upload"><input type="file" id="photo-input-edit" accept="image/*,video/*" multiple style="display:none"/>' + icon("image") + ' Carica foto/video</label>' +
+        '<button type="button" class="photo-upload" data-action="open-item-camera" data-edit="1">' + icon("camera") + ' Scatta foto</button><input type="file" id="photo-camera-input-edit" accept="image/*" capture="environment" style="display:none"/>' : '') +
+      '</div>' + (photos.length === 0 ? '<p class="photos-hint">Serve almeno una foto o un video: una card non può restare senza immagini.</p>' : '') + (photos.length > 1 ? '<p class="photos-hint">La prima foto è l\'immagine di copertina: usa le frecce per riordinarle.</p>' : '') + '</div>' +
       '<div class="modal-footer"><button type="submit" class="btn-primary block">Salva Modifiche</button></div>' +
       '</form></div>';
   }
@@ -2059,9 +2351,10 @@
        segnalare se quell'oggetto e' l'attuale immagine profilo, cosi' si sa a colpo
        d'occhio a cosa si va incontro selezionandolo (vedi anche l'avviso in toggleOffer) */
     var isProfile = showAvailability && item.id === profileItemId(state.inventory);
+    var inBet = showAvailability && myStakedIds().indexOf(item.id) !== -1;
     return '<div class="trade-item ' + (selected ? "selected" : "") + (unavailable ? " trade-item-unavail" : "") + '" data-action="' + action + '" data-id="' + escapeHtml(item.id) + '">' +
       '<div class="trade-item-thumb' + (photos.length ? "" : " empty") + '">' + thumbHtml + '</div>' +
-      '<span class="trade-item-name">' + escapeHtml(item.name) + (unavailable ? ' <span class="trade-item-badge">non disponibile</span>' : '') + (isProfile ? ' <span class="trade-item-badge trade-item-badge-profile">' + icon("star") + ' profilo</span>' : '') + '</span>' +
+      '<span class="trade-item-name">' + escapeHtml(item.name) + (unavailable ? ' <span class="trade-item-badge">non disponibile</span>' : '') + (isProfile ? ' <span class="trade-item-badge trade-item-badge-profile">' + icon("star") + ' profilo</span>' : '') + (inBet ? ' <span class="trade-item-badge">in scommessa</span>' : '') + '</span>' +
       (selected ? icon("check") : '') +
       '</div>';
   }
@@ -2069,14 +2362,20 @@
   /* selettore durata riusato in entrambi i form di proposta scambio (community e chat).
      Default "" = nessuna scadenza (infinita), coerente con lo stato iniziale del form. */
   function renderTradeDurationField() {
+    var bet = !!state.tradeIsBet;
     var opts = [
       ["", "Nessuna scadenza"],
       ["1h", "1 ora"], ["3h", "3 ore"], ["6h", "6 ore"], ["12h", "12 ore"],
       ["1", "24 ore"], ["3", "3 giorni"], ["7", "7 giorni"], ["14", "14 giorni"], ["30", "30 giorni"]
     ];
-    return '<div class="field trade-duration-field"><label>Durata della proposta</label><select id="trade-duration">' +
-      opts.map(function (o) { return '<option value="' + o[0] + '"' + (state.tradeDuration === o[0] ? " selected" : "") + '>' + o[1] + '</option>'; }).join("") +
-      '</select></div>';
+    /* una scommessa ha sempre un tempo prima del sorteggio: niente "nessuna scadenza" */
+    if (bet) opts = opts.filter(function (o) { return o[0] !== ""; });
+    var current = (bet && !state.tradeDuration) ? "1" : state.tradeDuration;
+    return '<label class="bet-toggle"><input type="checkbox" id="trade-is-bet"' + (bet ? " checked" : "") + '/><span>Fai di questo scambio una scommessa</span></label>' +
+      '<div class="field trade-duration-field"><label>' + (bet ? "Tempo prima del sorteggio" : "Durata della proposta") + '</label><select id="trade-duration">' +
+      opts.map(function (o) { return '<option value="' + o[0] + '"' + (current === o[0] ? " selected" : "") + '>' + o[1] + '</option>'; }).join("") +
+      '</select></div>' +
+      (bet ? '<p class="photos-hint bet-hint">Metti in palio le tue carte: l\'altro utente ha 24 ore per rifiutare o per aggiungere le sue. Se accetta, passato il tempo scelto un sorteggio 50/50 assegna TUTTE le carte (tue e sue) a uno solo dei due.</p>' : '');
   }
 
   /* id del primo oggetto dell'inventario (indipendentemente dal fatto che sia segnato
@@ -2306,14 +2605,17 @@
       html += '<div class="trade-builder-btn"><button type="button" data-action="open-trade-builder" class="btn-primary block">' + icon("swap") + ' Proponi Scambio</button></div>';
     }
     if (state.showTradeBuilder) {
-      html += '<div class="trade-builder"><div class="trade-section"><h3>Voglio</h3><div class="items-list">' +
+      html += '<div class="trade-builder">' + (state.tradeIsBet ? '' :
+        '<div class="trade-section"><h3>Voglio</h3><div class="items-list">' +
         filteredOther.map(function (item) {
           var sel = state.wantIds.indexOf(item.id) !== -1;
           return renderTradeItemCard(item, sel, "toggle-want", false);
         }).join("") +
         '</div></div>' +
-        '<div class="trade-divider">' + icon("swap") + '</div>' +
-        '<div class="trade-section"><h3>Offro</h3><p class="trade-section-hint">Puoi offrire anche oggetti segnati come "non disponibili": restano nascosti alla community ma puoi comunque proporli in questo scambio.</p><div class="items-list">' +
+        '<div class="trade-divider">' + icon("swap") + '</div>') +
+        '<div class="trade-section"><h3>' + (state.tradeIsBet ? "Metto in palio" : "Offro") + '</h3><p class="trade-section-hint">' +
+        (state.tradeIsBet ? 'Scegli le carte che metti in palio: se perdi il sorteggio vanno all\'altro utente. Puoi usare anche carte "non disponibili".' : 'Puoi offrire anche oggetti segnati come "non disponibili": restano nascosti alla community ma puoi comunque proporli in questo scambio.') +
+        '</p><div class="items-list">' +
         state.inventory.map(function (item) {
           var sel = state.offerIds.indexOf(item.id) !== -1;
           return renderTradeItemCard(item, sel, "toggle-offer", true);
@@ -2416,31 +2718,23 @@
     }
     if (type === "trade") {
       var trade = (state.allTrades || []).filter(function (t) { return t.id === m.tradeId; })[0];
-      var expired = isTradeExpired(trade);
-      var status = trade ? (trade.accepted ? "accepted" : trade.declined ? "declined" : trade.cancelled ? "cancelled" : expired ? "expired" : "pending") : "pending";
-      var isRecipient = trade && sameUser(trade.toUser || trade.to, state.currentUser);
-      var isSender = trade && sameUser(trade.fromUser || trade.from, state.currentUser);
-      var want = (m.wantNames || (trade && trade.wantNames) || []).map(escapeHtml).join(", ") || "—";
-      var offer = (m.offerNames || (trade && trade.offerNames) || []).map(escapeHtml).join(", ") || "—";
-      var html = '<div class="chat-trade-card ' + status + '">' +
-        '<div class="chat-trade-title">' + icon("swap") + ' Proposta di scambio</div>' +
-        '<div class="chat-trade-row"><span class="chat-trade-label">Vuole:</span> ' + want + '</div>' +
-        '<div class="chat-trade-row"><span class="chat-trade-label">Offre:</span> ' + offer + '</div>' +
-        '<div class="chat-trade-status">' + (status === "accepted" ? "Accettato" : status === "declined" ? "Rifiutato" : status === "cancelled" ? "Annullato" : status === "expired" ? "Scaduto" : "In attesa") + '</div>' +
-        (status === "pending" ? renderTradeExpiryBadge(trade, "chat-trade-expiry") : "");
-      if (status === "pending" && trade) {
-        if (isRecipient) {
-          html += '<div class="trade-actions-inline"><button type="button" data-action="accept-trade" data-id="' + escapeHtml(trade.id) + '" class="btn-primary btn-sm">' + icon("check") + ' Accetta</button>' +
-            '<button type="button" data-action="decline-trade" data-id="' + escapeHtml(trade.id) + '" class="btn-ghost btn-sm">' + icon("x") + ' Rifiuta</button></div>';
-        } else if (isSender) {
-          html += '<div class="trade-actions-inline"><button type="button" data-action="cancel-outgoing-trade" data-id="' + escapeHtml(trade.id) + '" class="btn-ghost btn-sm">' + icon("x") + ' Annulla</button></div>';
-        }
-      } else if (status === "expired" && trade && isSender) {
-        /* la proposta e' scaduta e non puo' piu' essere accettata: chi l'ha inviata puo' comunque annullarla per pulizia */
-        html += '<div class="trade-actions-inline"><button type="button" data-action="cancel-outgoing-trade" data-id="' + escapeHtml(trade.id) + '" class="btn-ghost btn-sm">' + icon("x") + ' Annulla</button></div>';
+      var info = tradeStatusInfo(trade);
+      var isBet = !!((trade && trade.bet) || m.bet);
+      var rows;
+      if (isBet) {
+        rows = betRowsHtml(trade, m);
+      } else {
+        var want = (m.wantNames || (trade && trade.wantNames) || []).map(escapeHtml).join(", ") || "—";
+        var offer = (m.offerNames || (trade && trade.offerNames) || []).map(escapeHtml).join(", ") || "—";
+        rows = '<div class="chat-trade-row"><span class="chat-trade-label">Vuole:</span> ' + want + '</div>' +
+          '<div class="chat-trade-row"><span class="chat-trade-label">Offre:</span> ' + offer + '</div>';
       }
-      html += '</div>';
-      return html;
+      return '<div class="chat-trade-card ' + info.cls + '">' +
+        '<div class="chat-trade-title">' + icon(isBet ? "star" : "swap") + (isBet ? " Scommessa" : " Proposta di scambio") + '</div>' +
+        rows +
+        '<div class="chat-trade-status">' + info.label + '</div>' +
+        (info.cls === "pending" ? renderTradeExpiryBadge(trade, "chat-trade-expiry") : "") +
+        renderTradeButtons(trade) + '</div>';
     }
     return '<div class="chat-bubble-text">' + escapeHtml(m.text || "") + '</div>';
   }
@@ -2569,14 +2863,17 @@
       '<div class="modal">' +
       '<div class="modal-header"><h2>Proponi scambio a ' + escapeHtml(state.chatTarget.name) + '</h2><button type="button" data-action="close-chat-trade" class="btn-close">' + icon("x") + '</button></div>' +
       '<div class="modal-body">' +
-      '<div class="trade-builder trade-builder-inline"><div class="trade-section"><h3>Voglio</h3><div class="items-list">' +
+      '<div class="trade-builder trade-builder-inline">' + (state.tradeIsBet ? '' :
+      '<div class="trade-section"><h3>Voglio</h3><div class="items-list">' +
       (otherItems.length ? otherItems.map(function (item) {
         var sel = state.wantIds.indexOf(item.id) !== -1;
         return renderTradeItemCard(item, sel, "toggle-want", false);
       }).join("") : '<p class="chat-sub">Nessun oggetto disponibile.</p>') +
       '</div></div>' +
-      '<div class="trade-divider">' + icon("swap") + '</div>' +
-      '<div class="trade-section"><h3>Offro</h3><p class="trade-section-hint">Puoi offrire anche oggetti segnati come "non disponibili".</p><div class="items-list">' +
+      '<div class="trade-divider">' + icon("swap") + '</div>') +
+      '<div class="trade-section"><h3>' + (state.tradeIsBet ? "Metto in palio" : "Offro") + '</h3><p class="trade-section-hint">' +
+      (state.tradeIsBet ? 'Se perdi il sorteggio le carte scelte vanno all\'altro utente.' : 'Puoi offrire anche oggetti segnati come "non disponibili".') +
+      '</p><div class="items-list">' +
       state.inventory.map(function (item) {
         var sel = state.offerIds.indexOf(item.id) !== -1;
         return renderTradeItemCard(item, sel, "toggle-offer", true);
@@ -2615,32 +2912,18 @@
         var fromU = t.fromUser || t.from || "";
         var toU = t.toUser || t.to || "";
         var isSender = sameUser(fromU, state.currentUser);
-        var isRecipient = sameUser(toU, state.currentUser);
         var other = escapeHtml(isSender ? toU : fromU);
-        var expired = isTradeExpired(t);
-        var statusClass = t.accepted ? "accepted" : t.declined ? "declined" : t.cancelled ? "cancelled" : expired ? "expired" : "pending";
-        var statusLabel = t.accepted ? "Accettato" : t.declined ? "Rifiutato" : t.cancelled ? "Annullato" : expired ? "Scaduto" : "In attesa";
-        return '<div class="trade-card ' + statusClass + '">' +
-          '<div class="trade-header"><span>' + (isSender ? "A: " : "Da: ") + other + '</span>' +
-          '<span class="trade-status">' + statusLabel + '</span></div>' +
-          (!t.accepted && !t.declined && !t.cancelled ? renderTradeExpiryBadge(t, "trade-expiry") : "") +
-          ((t.wantNames && t.wantNames.length) || (t.offerNames && t.offerNames.length)
+        var info = tradeStatusInfo(t);
+        var rowsHtml = t.bet ? betRowsHtml(t, null)
+          : ((t.wantNames && t.wantNames.length) || (t.offerNames && t.offerNames.length)
             ? '<div class="chat-trade-row"><span class="chat-trade-label">' + (isSender ? "Volevi:" : "Vuole:") + '</span> ' + (t.wantNames || []).map(escapeHtml).join(", ") + '</div>' +
               '<div class="chat-trade-row"><span class="chat-trade-label">' + (isSender ? "Offrivi:" : "Offre:") + '</span> ' + (t.offerNames || []).map(escapeHtml).join(", ") + '</div>'
-            : '') +
-          (!t.accepted && !t.declined && !t.cancelled
-            ? '<div class="trade-actions-inline">' +
-              (isSender
-                ? '<button type="button" data-action="cancel-outgoing-trade" data-id="' + escapeHtml(t.id) + '" class="btn-ghost">' + icon("x") + ' Annulla</button>'
-                : isRecipient
-                  ? (expired
-                      ? '<span class="pill-muted">Proposta scaduta</span>'
-                      : '<button type="button" data-action="accept-trade" data-id="' + escapeHtml(t.id) + '" class="btn-primary btn-sm">' + icon("check") + ' Accetta</button>' +
-                        '<button type="button" data-action="decline-trade" data-id="' + escapeHtml(t.id) + '" class="btn-ghost btn-sm">' + icon("x") + ' Rifiuta</button>')
-                  : '') +
-              '</div>'
-            : '') +
-          '</div>';
+            : '');
+        return '<div class="trade-card ' + info.cls + '">' +
+          '<div class="trade-header"><span>' + (t.bet ? "Scommessa " : "") + (isSender ? "A: " : "Da: ") + other + '</span>' +
+          '<span class="trade-status">' + info.label + '</span></div>' +
+          ((info.cls === "pending" || info.cls === "expired") ? renderTradeExpiryBadge(t, "trade-expiry") : "") +
+          rowsHtml + renderTradeButtons(t) + '</div>';
       }).join("") + '</div>';
       if (state.history.length > state.historyLimit) { html += '<div class="load-more"><button type="button" data-action="history-more" class="btn-ghost">Carica altri...</button></div>'; }
     }
@@ -2731,6 +3014,7 @@
       (state.showAddItem ? renderAddItemModal() : "") +
       (state.showEditItem ? renderEditItemModal() : "") +
       (state.showDeleteAccountConfirm ? renderDeleteAccountModal() : "") +
+      (state.showBetAccept ? renderBetAcceptModal() : "") +
       renderLightbox();
   }
 
@@ -2944,19 +3228,24 @@
     else if (action === "cancel-chat-media") { cancelChatMedia(); }
     else if (action === "toggle-audio") { toggleChatAudio(t.dataset.id); }
     else if (action === "open-camera") { openCameraCapture(); }
+    else if (action === "open-item-camera") { openCameraCapture(t.dataset.edit === "1" ? "item-edit" : "item"); }
     else if (action === "start-voice-recording") { startVoiceRecording(); }
     else if (action === "stop-voice-recording") { stopVoiceRecording(true); }
     else if (action === "cancel-voice-recording") { stopVoiceRecording(false); }
     else if (action === "go-profile") { goToOwnInventory(); }
     else if (action === "install-app") { promptInstall(); }
-    else if (action === "open-trade-builder") { state.showTradeBuilder = true; state.tradeDuration = ""; render(); }
-    else if (action === "cancel-trade-builder") { state.showTradeBuilder = false; state.wantIds = []; state.offerIds = []; state.tradeDuration = ""; render(); }
+    else if (action === "open-trade-builder") { state.showTradeBuilder = true; state.tradeDuration = ""; state.tradeIsBet = false; render(); }
+    else if (action === "cancel-trade-builder") { state.showTradeBuilder = false; state.wantIds = []; state.offerIds = []; state.tradeDuration = ""; state.tradeIsBet = false; render(); }
     else if (action === "toggle-want") { toggleWant(t.dataset.id); }
     else if (action === "toggle-offer") { toggleOffer(t.dataset.id); }
     else if (action === "submit-trade") { submitTrade(); }
     else if (action === "accept-trade") { respondTrade(t.dataset.id, true); }
     else if (action === "decline-trade") { respondTrade(t.dataset.id, false); }
     else if (action === "cancel-outgoing-trade") { cancelTrade(t.dataset.id); }
+    else if (action === "open-bet-accept") { openBetAccept(t.dataset.id); }
+    else if (action === "close-bet-accept") { closeBetAccept(); }
+    else if (action === "toggle-bet-counter") { toggleBetCounter(t.dataset.id); }
+    else if (action === "confirm-bet-accept") { confirmBetAccept(); }
     else if (action === "view-photos") { viewPhotos(t.dataset.id, t.dataset.source); }
     else if (action === "close-lightbox") { closeLightbox(); }
     else if (action === "lightbox-prev") { lightboxStep(-1); }
@@ -2977,14 +3266,14 @@
   });
 
   document.addEventListener("change", function (e) {
-    if (e.target && e.target.id === "photo-input") handleFileChange(e);
-    else if (e.target && e.target.id === "photo-input-edit") handleFileChange(e);
+    if (e.target && /^photo-(camera-)?input(-edit)?$/.test(e.target.id)) handleFileChange(e);
     else if (e.target && (e.target.id === "chat-media-input" || e.target.id === "chat-camera-input")) handleChatMediaChange(e);
     else if (e.target && e.target.type === "checkbox" && e.target.closest(".avail-toggle")) toggleAvailable(e.target.dataset.id);
     else if (e.target && e.target.id === "history-user-filter") { state.historyUserFilter = e.target.value; state.historyLimit = HISTORY_PAGE; updateHistory(); }
     else if (e.target && e.target.id === "history-date-from") { state.historyDateFrom = e.target.value; state.historyLimit = HISTORY_PAGE; updateHistory(); }
     else if (e.target && e.target.id === "history-date-to") { state.historyDateTo = e.target.value; state.historyLimit = HISTORY_PAGE; updateHistory(); }
     else if (e.target && e.target.id === "trade-duration") state.tradeDuration = e.target.value;
+    else if (e.target && e.target.id === "trade-is-bet") { state.tradeIsBet = e.target.checked; render(); }
   });
 
   document.addEventListener("input", function (e) {
@@ -3177,7 +3466,7 @@
           chatHasMoreOlder: false,
           chatLoadingOlder: false,
           showDeleteAccountConfirm: false,
-          tradeDuration: "",
+          tradeDuration: "", tradeIsBet: false, showBetAccept: null, betCounterIds: [],
           historyUserFilter: "",
           historyDateFrom: "",
           historyDateTo: "",

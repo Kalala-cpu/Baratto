@@ -1756,3 +1756,21 @@ input { font-family: inherit; }
   .history-adv-filters .field { flex: 1 1 100%; }
   .history-adv-clear { width: 100%; justify-content: center; }
 }
+
+/* =======================================================================
+   SCOMMESSE E FOTO CARD
+   ======================================================================= */
+.bet-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin-top: 1.25rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--ink);
+  cursor: pointer;
+}
+.bet-toggle input { accent-color: var(--brass); width: 1.05rem; height: 1.05rem; margin-top: 0.1rem; flex-shrink: 0; }
+.bet-hint { margin-top: 0.5rem; }
+.chat-trade-row em { color: var(--ink-soft); }
+button.photo-upload { background: none; font-family: inherit; }
