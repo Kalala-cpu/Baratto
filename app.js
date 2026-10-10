@@ -1732,7 +1732,7 @@
   function tradeStatusInfo(t) {
     if (!t) return { cls: "pending", label: "In attesa" };
     if (t.accepted) return { cls: "accepted", label: (t.bet && t.betWinner) ? "Vince " + t.betWinner : "Accettato" };
-    if (t.declined) return { cls: "declined", label: "Rifiutato" };
+    if (t.declined) return { cls: "declined", label: t.betStatus === "expired" ? "Rifiutata: nessuna risposta" : "Rifiutato" };
     if (t.cancelled) return { cls: "cancelled", label: "Annullato" };
     if (isTradeExpired(t)) return { cls: "expired", label: "Scaduto" };
     if (t.bet) {
@@ -1933,11 +1933,33 @@
       loadTrades(); loadInventory();
     });
   }
+  /* scommessa in attesa di risposta oltre le 24h (expiresAt): l'altro utente non ha messo
+     le sue carte, quindi viene rifiutata in automatico. Transazione: la fa un solo client. */
+  function expireBet(tradeId) {
+    if (tradeInFlight[tradeId]) return;
+    tradeInFlight[tradeId] = true;
+    fbDb.ref("trades/" + tradeId).transaction(function (cur) {
+      if (cur === null) return cur;
+      if (!cur.bet || cur.betStatus !== "awaiting" || cur.accepted || cur.declined || cur.cancelled) return;
+      if (!(cur.expiresAt && Date.now() > cur.expiresAt)) return;
+      cur.declined = true;
+      cur.betStatus = "expired";
+      return cur;
+    }).then(function (r) {
+      if (!r.committed) return;
+      sendTradeSystemMessage(r.snapshot.val(), "Scommessa rifiutata in automatico: nessuna risposta entro 24 ore.");
+      setMessage("Una scommessa è stata rifiutata in automatico: nessuna risposta entro 24 ore.", "error");
+      loadTrades();
+    }).catch(function (err) {
+      setMessage(dbErrorMessage(err, "Errore scommessa: " + err.message), "error");
+    }).then(function () { delete tradeInFlight[tradeId]; });
+  }
   function checkBetDraws() {
     if (!state.currentUser) return;
     (state.allTrades || []).forEach(function (t) {
       if (!t || !t.bet || t.accepted || t.declined || t.cancelled) return;
-      if (t.betStatus === "locked" && t.drawAt && Date.now() >= t.drawAt) runBet(t.id);
+      if (t.betStatus === "awaiting" && t.expiresAt && Date.now() > t.expiresAt) expireBet(t.id);
+      else if (t.betStatus === "locked" && t.drawAt && Date.now() >= t.drawAt) runBet(t.id);
       else if (t.betStatus === "drawn") runBet(t.id);
     });
   }
@@ -2254,7 +2276,7 @@
      all'ultimo controllo, e solo in quel caso chiamiamo render() (ora sicuro anche a
      intervalli regolari, perche' render() preserva scroll/focus): cosi' lo stato "Scaduto"
      compare da solo, senza ridisegnare in continuazione quando non serve. */
-  var TRADE_EXPIRY_CHECK_MS = 30000;
+  var TRADE_EXPIRY_CHECK_MS = 15000;
   var lastExpiredTradeIds = "";
   function checkTradeExpiries() {
     if (!state.currentUser) return;
@@ -2407,7 +2429,7 @@
     var bet = !!state.tradeIsBet;
     var opts = [
       ["", "Nessuna scadenza"],
-      ["5m", "5 minuti"], ["1h", "1 ora"], ["3h", "3 ore"], ["6h", "6 ore"], ["12h", "12 ore"],
+      ["1m", "1 minuto"], ["5m", "5 minuti"], ["1h", "1 ora"], ["3h", "3 ore"], ["6h", "6 ore"], ["12h", "12 ore"],
       ["1", "24 ore"], ["3", "3 giorni"], ["7", "7 giorni"], ["14", "14 giorni"], ["30", "30 giorni"]
     ];
     /* una scommessa ha sempre un tempo prima del sorteggio: niente "nessuna scadenza" */
@@ -2417,7 +2439,7 @@
       '<div class="field trade-duration-field"><label>' + (bet ? "Tempo prima del sorteggio" : "Durata della proposta") + '</label><select id="trade-duration">' +
       opts.map(function (o) { return '<option value="' + o[0] + '"' + (current === o[0] ? " selected" : "") + '>' + o[1] + '</option>'; }).join("") +
       '</select></div>' +
-      (bet ? '<p class="photos-hint bet-hint">Metti in palio le tue carte: l\'altro utente ha 24 ore per rifiutare o per aggiungere le sue. Se accetta, passato il tempo scelto un sorteggio 50/50 assegna TUTTE le carte (tue e sue) a uno solo dei due.</p>' : '');
+      (bet ? '<p class="photos-hint bet-hint">Metti in palio le tue carte: l\'altro utente ha 24 ore per rifiutare o per aggiungere le sue: se non risponde, la scommessa viene rifiutata in automatico. Se accetta, passato il tempo scelto un sorteggio 50/50 assegna TUTTE le carte (tue e sue) a uno solo dei due.</p>' : '');
   }
 
   /* id del primo oggetto dell'inventario (indipendentemente dal fatto che sia segnato
