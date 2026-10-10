@@ -1798,7 +1798,7 @@
       '<div class="modal-header"><h2>Partecipa alla scommessa</h2><button type="button" data-action="close-bet-accept" class="btn-close">' + icon("x") + '</button></div>' +
       '<div class="modal-body">' +
       '<div class="chat-trade-row"><span class="chat-trade-label">Puntata di ' + escapeHtml(fromName) + ':</span> ' + (toArray(t.offerNames).map(escapeHtml).join(", ") || "—") + '</div>' +
-      '<p class="trade-section-hint" style="margin-top:0.6rem;">Scegli le carte che metti in palio contro le sue. Dopo la tua accettazione il sorteggio (50/50) avverrà dopo ' + describeDuration(t.betDelayMs) + ': chi vince prende tutte le carte, sue e tue. Una volta accettata non si può annullare.</p>' +
+      '<p class="trade-section-hint" style="margin-top:0.6rem;">Scegli le carte che metti in palio contro le sue. ' + (t.betDelayMs === 0 ? 'Il sorteggio (50/50) avverrà subito dopo la tua accettazione' : 'Dopo la tua accettazione il sorteggio (50/50) avverrà dopo ' + describeDuration(t.betDelayMs)) + ': chi vince prende tutte le carte, sue e tue. Una volta accettata non si può annullare.</p>' +
       '<div class="trade-section"><h3>Le mie carte</h3><div class="items-list">' +
       (state.inventory.length ? state.inventory.map(function (item) {
         return renderTradeItemCard(item, state.betCounterIds.indexOf(item.id) !== -1, "toggle-bet-counter", true);
@@ -1831,7 +1831,7 @@
         cur.counterNames = names;
         cur.betStatus = "locked";
         cur.lockedAt = lockedAt;
-        cur.drawAt = lockedAt + (cur.betDelayMs || BET_RESPONSE_MS);
+        cur.drawAt = lockedAt + (typeof cur.betDelayMs === "number" ? cur.betDelayMs : BET_RESPONSE_MS);
         cur.expiresAt = null;
         return cur;
       });
@@ -2005,7 +2005,7 @@
     if (isBet) {
       trade.bet = true;
       trade.betStatus = "awaiting";
-      trade.betDelayMs = durationMs(state.tradeDuration) || BET_RESPONSE_MS;
+      trade.betDelayMs = durationMs(state.tradeDuration) || 0; /* 0 = sorteggio immediato dopo l'accettazione */
     }
     return trade;
   }
@@ -2432,14 +2432,14 @@
       ["1m", "1 minuto"], ["5m", "5 minuti"], ["1h", "1 ora"], ["3h", "3 ore"], ["6h", "6 ore"], ["12h", "12 ore"],
       ["1", "24 ore"], ["3", "3 giorni"], ["7", "7 giorni"], ["14", "14 giorni"], ["30", "30 giorni"]
     ];
-    /* una scommessa ha sempre un tempo prima del sorteggio: niente "nessuna scadenza" */
-    if (bet) opts = opts.filter(function (o) { return o[0] !== ""; });
-    var current = (bet && !state.tradeDuration) ? "1" : state.tradeDuration;
+    /* per una scommessa la durata e' il tempo prima del sorteggio: "nessuna scadenza" diventa "Immediata" */
+    if (bet) opts[0] = ["", "Immediata"];
+    var current = state.tradeDuration;
     return '<label class="bet-toggle"><input type="checkbox" id="trade-is-bet"' + (bet ? " checked" : "") + '/><span>Fai di questo scambio una scommessa</span></label>' +
       '<div class="field trade-duration-field"><label>' + (bet ? "Tempo prima del sorteggio" : "Durata della proposta") + '</label><select id="trade-duration">' +
       opts.map(function (o) { return '<option value="' + o[0] + '"' + (current === o[0] ? " selected" : "") + '>' + o[1] + '</option>'; }).join("") +
       '</select></div>' +
-      (bet ? '<p class="photos-hint bet-hint">Metti in palio le tue carte: l\'altro utente ha 24 ore per rifiutare o per aggiungere le sue: se non risponde, la scommessa viene rifiutata in automatico. Se accetta, passato il tempo scelto un sorteggio 50/50 assegna TUTTE le carte (tue e sue) a uno solo dei due.</p>' : '');
+      (bet ? '<p class="photos-hint bet-hint">Metti in palio le tue carte: l\'altro utente ha 24 ore per rifiutare o per aggiungere le sue: se non risponde, la scommessa viene rifiutata in automatico. Se accetta, passato il tempo scelto (o subito, con "Immediata") un sorteggio 50/50 assegna TUTTE le carte (tue e sue) a uno solo dei due.</p>' : '');
   }
 
   /* id del primo oggetto dell'inventario (indipendentemente dal fatto che sia segnato
