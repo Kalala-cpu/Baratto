@@ -2667,7 +2667,7 @@
     var search = (state.inventorySearch || "").toLowerCase();
     var filtered = state.inventory.filter(function (i) { return !search || i.name.toLowerCase().indexOf(search) !== -1; });
     var html = '<div class="page-header"><h2>Il mio inventario</h2><div class="friend-actions">' +
-      (state.inventory.length ? '<button type="button" data-action="open-gift" class="btn-ghost">' + icon("gift") + ' Regala</button>' : '') +
+      (state.inventory.length ? '<button type="button" data-action="open-gift" class="btn-ghost btn-same">' + icon("gift") + ' Regala</button>' : '') +
       '<button type="button" data-action="open-add-item" class="btn-primary">' + icon("plus") + ' Aggiungi</button></div></div>';
     if (state.inventory.length === 0) {
       html += '<div class="empty-state"><p>Nessun oggetto. Aggiungi il primo!</p></div>';
@@ -2748,7 +2748,7 @@
     var filteredOther = availableOther.filter(function (i) { return !search || i.name.toLowerCase().indexOf(search) !== -1; });
     var html = '<div class="page-header"><button type="button" data-action="back-to-community" class="btn-icon-left">' + icon("chevron-left") + ' Indietro</button>' +
       '<div class="user-page-title">' + userAvatarHtml(state.selectedUser, "user-page-avatar") +
-      '<h2 class="user-page-name clickable" data-action="open-chat" data-username="' + escapeHtml(state.selectedUser) + '" title="Apri chat con ' + escapeHtml(state.selectedUser) + '">' + escapeHtml(state.selectedUser) + '</h2></div>' + friendBtnHtml + '</div>';
+      '<h2 class="user-page-name clickable" data-action="open-chat" data-username="' + escapeHtml(state.selectedUser) + '" title="Apri chat con ' + escapeHtml(state.selectedUser) + '">' + escapeHtml(state.selectedUser) + '</h2></div><div class="friend-actions user-page-actions">' + friendBtnHtml + '</div></div>';
     if (state.otherUserInventory.length === 0) {
       html += '<div class="empty-state"><p>Nessun oggetto disponibile.</p></div>';
     } else {
@@ -2825,16 +2825,13 @@
         html += '<p class="photos-hint">Nessun utente della community corrisponde a questo nome: se sei sicuro dell\'ortografia puoi comunque premere "Aggiungi", verrà controllato di nuovo.</p>';
       }
     }
-    if (incoming.length || outgoing.length || accepted.length) {
-      html += '<div class="search-box-wrap"><input type="text" id="friends-search" placeholder="Cerca nei tuoi amici..." value="' + escapeHtml(state.friendsSearch) + '"/>' + (state.friendsSearch ? '<button type="button" data-action="clear-search" data-target="friends" class="btn-clear">' + icon("x") + '</button>' : '') + '</div>';
-    }
     var fSearch = (state.friendsSearch || "").toLowerCase();
     var byName = function (arr) { return fSearch ? arr.filter(function (f) { return (f.username || "").toLowerCase().indexOf(fSearch) !== -1; }) : arr; };
-    var fIncoming = byName(incoming), fOutgoing = byName(outgoing), fAccepted = byName(accepted);
+    var fIncoming = incoming, fOutgoing = outgoing, fAccepted = byName(accepted);
     if (fIncoming.length) { html += '<div class="section-title">Richieste in sospeso</div>' + fIncoming.map(function (r) { return '<div class="friend-card"><div class="who">' + userAvatarHtml(r.username || "") + '<div><div class="name">' + escapeHtml(r.username || "") + '</div></div></div><div class="friend-actions"><button type="button" data-action="accept-friend" data-id="' + escapeHtml(r.id) + '" class="btn-ghost friend-accept">' + icon("user-check") + '</button><button type="button" data-action="decline-friend" data-id="' + escapeHtml(r.id) + '" class="btn-ghost">' + icon("x") + '</button></div></div>'; }).join(""); }
     if (fOutgoing.length) { html += '<div class="section-title">Richieste inviate</div>' + fOutgoing.map(function (r) { return '<div class="friend-card"><div class="who">' + userAvatarHtml(r.username || "") + '<div><div class="name">' + escapeHtml(r.username || "") + '</div></div></div><div class="friend-actions"><span class="pill-muted">In attesa</span><button type="button" data-action="cancel-friend-request" data-id="' + escapeHtml(r.id) + '" class="btn-ghost">' + icon("x") + '</button></div></div>'; }).join(""); }
-    if (fAccepted.length) { html += '<div class="section-title">Amici</div>' + fAccepted.map(function (f) { return '<div class="friend-card"><div class="who clickable" data-action="open-chat" data-username="' + escapeHtml(f.username || "") + '" title="Apri chat con ' + escapeHtml(f.username || "") + '">' + userAvatarHtml(f.username || "") + '<div><div class="name">' + escapeHtml(f.username || "") + '</div></div></div><div class="friend-actions"><button type="button" data-action="open-chat" data-username="' + escapeHtml(f.username || "") + '" class="btn-ghost" title="Chat">' + icon("message") + '</button><button type="button" data-action="open-friend" data-username="' + escapeHtml(f.username || "") + '" class="btn-ghost" title="Inventario">' + icon("inbox") + '</button><button type="button" data-action="remove-friend" data-id="' + escapeHtml(f.id) + '" data-username="' + escapeHtml(f.username || "") + '" class="btn-ghost">' + icon("x") + '</button></div></div>'; }).join(""); }
-    if (!fIncoming.length && !fOutgoing.length && !fAccepted.length) { html += '<div class="empty-state"><p>' + (fSearch ? "Nessun amico trovato." : "Nessun amico ancora. Inizia ad aggiungerne!") + '</p></div>'; }
+    if (accepted.length) { html += '<div class="section-title">Amici</div>' + '<div class="search-box-wrap"><input type="text" id="friends-search" placeholder="Cerca nei tuoi amici..." value="' + escapeHtml(state.friendsSearch) + '"/>' + (state.friendsSearch ? '<button type="button" data-action="clear-search" data-target="friends" class="btn-clear">' + icon("x") + '</button>' : '') + '</div>' + (fAccepted.length ? '' : '<div class="empty-state"><p>Nessun amico trovato.</p></div>') + fAccepted.map(function (f) { return '<div class="friend-card"><div class="who clickable" data-action="open-chat" data-username="' + escapeHtml(f.username || "") + '" title="Apri chat con ' + escapeHtml(f.username || "") + '">' + userAvatarHtml(f.username || "") + '<div><div class="name">' + escapeHtml(f.username || "") + '</div></div></div><div class="friend-actions"><button type="button" data-action="open-chat" data-username="' + escapeHtml(f.username || "") + '" class="btn-ghost" title="Chat">' + icon("message") + '</button><button type="button" data-action="open-friend" data-username="' + escapeHtml(f.username || "") + '" class="btn-ghost" title="Inventario">' + icon("inbox") + '</button><button type="button" data-action="remove-friend" data-id="' + escapeHtml(f.id) + '" data-username="' + escapeHtml(f.username || "") + '" class="btn-ghost">' + icon("x") + '</button></div></div>'; }).join(""); }
+    if (!incoming.length && !outgoing.length && !accepted.length) { html += '<div class="empty-state"><p>Nessun amico ancora. Inizia ad aggiungerne!</p></div>'; }
     return html;
   }
 
@@ -2926,7 +2923,7 @@
       '<div class="chat-thread-title"><h2>' + escapeHtml(target.name) + '</h2>' + (isGroup ? '<div class="chat-sub">' + toArray(target.members).length + ' membri</div>' : '<div class="chat-sub">Vedi inventario</div>') + '</div>' +
       '</div>' +
       '<div class="chat-thread-actions">' +
-      (!isGroup ? '<button type="button" data-action="open-chat-trade" class="btn-ghost btn-sm" title="Proponi scambio">' + icon("swap") + ' Scambio</button>' : '<button type="button" data-action="leave-group" data-id="' + escapeHtml(target.id) + '" class="btn-ghost btn-sm" title="Esci dal gruppo">' + icon("x") + ' Esci</button>') +
+      (!isGroup ? '<button type="button" data-action="open-gift" data-username="' + escapeHtml(target.id) + '" class="btn-ghost btn-sm" title="Regala delle carte">' + icon("gift") + ' Regala</button>' + '<button type="button" data-action="open-chat-trade" class="btn-ghost btn-sm" title="Proponi scambio">' + icon("swap") + ' Scambio</button>' : '<button type="button" data-action="leave-group" data-id="' + escapeHtml(target.id) + '" class="btn-ghost btn-sm" title="Esci dal gruppo">' + icon("x") + ' Esci</button>') +
       '</div></div>';
     html += '<div class="chat-messages" id="chat-messages">';
     if (state.chatLoadingOlder) { html += '<div class="chat-load-older">' + icon("loader", "spin-tiny") + ' Carico messaggi precedenti...</div>'; }
@@ -3176,6 +3173,44 @@
         '<div class="tab-nav">' + tabsHtml + "</div></header>";
   }
 
+  /* ============ banner stagionali (Halloween / Natale) ============
+     Compare in cima all'app solo nei periodi giusti (Halloween: 15 ott - 2 nov; Natale:
+     1 dic - 6 gen) e si puo' chiudere: la scelta resta per la sessione del browser. */
+  var SEASON_DISMISS_KEY = "barattoSeasonDismissed";
+  /* data della Pasqua (calendario gregoriano, algoritmo di Meeus/Jones/Butcher) */
+  function easterDate(y) {
+    var a = y % 19, b = Math.floor(y / 100), c = y % 100, d = Math.floor(b / 4), e = b % 4;
+    var f = Math.floor((b + 8) / 25), g = Math.floor((b - f + 1) / 3);
+    var h = (19 * a + b - d - g + 15) % 30, i = Math.floor(c / 4), k = c % 4;
+    var l = (32 + 2 * e + 2 * i - h - k) % 7, m2 = Math.floor((a + 11 * h + 22 * l) / 451);
+    var month = Math.floor((h + l - 7 * m2 + 114) / 31), day = ((h + l - 7 * m2 + 114) % 31) + 1;
+    return new Date(y, month - 1, day);
+  }
+  /* periodi: Capodanno 29 dic - 2 gen; Natale 1 dic - 6 gen; Pasqua da 7 giorni prima al
+     Lunedi' dell'Angelo; Ferragosto 10-16 ago; Halloween 15 ott - 2 nov. Il primo che
+     corrisponde vince (Capodanno prima di Natale, che altrimenti lo coprirebbe). */
+  function currentSeason() {
+    var d = new Date(), y = d.getFullYear(), m = d.getMonth(), day = d.getDate();
+    if ((m === 11 && day >= 29) || (m === 0 && day <= 2)) return { id: "newyear", year: m === 0 ? y - 1 : y, emoji: "\uD83C\uDF86", title: "Buon Anno!", text: "Comincia l'anno con un gesto: regala una carta a un amico, o a qualcuno a caso." };
+    if (m === 11 || (m === 0 && day <= 6)) return { id: "christmas", year: m === 0 ? y - 1 : y, emoji: "\uD83C\uDF84", title: "Buone Feste!", text: "È tempo di regali: manda una carta a un amico, o a sorpresa a qualcuno a caso." };
+    var easter = easterDate(y), today = new Date(y, m, day);
+    var diff = Math.round((today - easter) / 86400000);
+    if (diff >= -7 && diff <= 1) return { id: "easter", year: y, emoji: "\uD83D\uDC23", title: "Buona Pasqua!", text: "Una sorpresa nell'uovo? Regala una carta a un amico o a un utente a caso." };
+    if (m === 7 && day >= 10 && day <= 16) return { id: "ferragosto", year: y, emoji: "\uD83C\uDFD6\uFE0F", title: "Buon Ferragosto!", text: "Estate di scambi: regala una carta a un amico, o a qualcuno a caso." };
+    if ((m === 9 && day >= 15) || (m === 10 && day <= 2)) return { id: "halloween", year: y, emoji: "\uD83C\uDF83", title: "Buon Halloween!", text: "Dolcetto o scherzetto? Regala una carta a un utente a caso e vedi cosa succede." };
+    return null;
+  }
+  function renderSeasonBanner() {
+    var s = currentSeason();
+    if (!s) return "";
+    var key = s.id + "-" + s.year;
+    try { if (sessionStorage.getItem(SEASON_DISMISS_KEY) === key) return ""; } catch (err) { /* storage non disponibile: mostra comunque */ }
+    return '<div class="season-banner season-' + s.id + '"><span class="season-emoji" aria-hidden="true">' + s.emoji + '</span>' +
+      '<span class="season-text"><strong>' + s.title + '</strong> ' + s.text + '</span>' +
+      (state.currentUser && state.inventory.length ? '<button type="button" data-action="open-gift" class="btn-ghost btn-sm">' + icon("gift") + ' Regala</button>' : '') +
+      '<button type="button" data-action="dismiss-season" data-key="' + key + '" class="btn-clear" title="Chiudi">' + icon("x") + '</button></div>';
+  }
+
   /* ============ tutto cio' che sta SOTTO l'header ============
      A differenza dell'header, questo viene ricostruito da zero ad ogni render() (vedi
      #app-body-slot in render()): non ha bisogno di essere "persistente" perche' non ha
@@ -3300,7 +3335,7 @@
       headerSlot.innerHTML = newHeaderHtml;
       lastHeaderHtml = newHeaderHtml;
     }
-    bodySlot.innerHTML = renderOfflineBanner() + (state.currentUser ? renderAppBody() : renderAuth());
+    bodySlot.innerHTML = renderOfflineBanner() + renderSeasonBanner() + (state.currentUser ? renderAppBody() : renderAuth());
 
     if (keepFocusId) {
       var el = document.getElementById(keepFocusId);
@@ -3416,6 +3451,7 @@
     else if (action === "cancel-voice-recording") { stopVoiceRecording(false); }
     else if (action === "go-profile") { goToOwnInventory(); }
     else if (action === "install-app") { promptInstall(); }
+    else if (action === "dismiss-season") { try { sessionStorage.setItem(SEASON_DISMISS_KEY, t.dataset.key); } catch (err) {} render(); }
     else if (action === "open-gift") { openGiftModal(t.dataset.username || ""); }
     else if (action === "close-gift") { closeGiftModal(); }
     else if (action === "toggle-gift-card") { toggleGiftCard(t.dataset.id); }

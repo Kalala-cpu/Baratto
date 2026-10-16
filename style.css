@@ -1789,3 +1789,40 @@ button.photo-upload { background: none; font-family: inherit; }
 
 /* carte dell'altro utente non selezionabili (modalita' scommessa) */
 .item-select.no-select { cursor: default; }
+
+/* =======================================================================
+   BANNER STAGIONALI (Halloween / Natale)
+   ======================================================================= */
+.season-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.7rem;
+  padding: 0.55rem 1rem;
+  font-size: 0.85rem;
+  text-align: center;
+  color: #fff;
+  flex-wrap: wrap;
+}
+.season-banner .season-emoji { font-size: 1.3rem; line-height: 1; }
+.season-banner .season-text { flex: 0 1 auto; }
+.season-banner .btn-ghost { color: #fff; border-color: rgba(255, 255, 255, 0.55); }
+.season-banner .btn-ghost:hover { background: rgba(255, 255, 255, 0.18); border-color: #fff; }
+.season-banner .btn-clear { color: rgba(255, 255, 255, 0.85); }
+.season-banner .btn-clear:hover { color: #fff; }
+.season-halloween { background: linear-gradient(90deg, #2b1a3d, #6b2f0f 55%, #c2603f); }
+.season-christmas { background: linear-gradient(90deg, #1f4d2b, #8f2f2f 60%, #b43f3f); }
+.season-easter { background: linear-gradient(90deg, #6d4c9f, #b5792f 70%, #d19a4f); }
+.season-newyear { background: linear-gradient(90deg, #14213d, #3a3a8f 55%, #b5792f); }
+.season-ferragosto { background: linear-gradient(90deg, #17607a, #2a8f9c 50%, #d9822b); }
+
+/* pulsante secondario con le stesse dimensioni di .btn-primary (il bordo da 1px viene
+   sottratto dal padding, cosi' l'altezza combacia) */
+.btn-ghost.btn-same {
+  justify-content: center;
+  gap: 0.4rem;
+  padding: calc(0.65rem - 1px) calc(1.1rem - 1px);
+  font-size: 0.92rem;
+}
+/* gruppo di azioni a destra nell'intestazione del profilo di un altro utente */
+.user-page-actions { margin-left: auto; flex-wrap: wrap; justify-content: flex-end; }
