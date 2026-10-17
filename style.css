@@ -1840,3 +1840,22 @@ button.photo-upload { background: none; font-family: inherit; }
   .chat-thread-actions .btn-label { display: none; }
   .chat-thread-actions .btn-ghost { padding: 0.45rem; width: 2.2rem; height: 2.2rem; justify-content: center; }
 }
+
+/* profilo di un altro utente (Community): il nome si restringe con i puntini invece di
+   finire sotto i pulsanti; su schermi stretti i pulsanti restano solo icona */
+.user-page-title { flex: 1 1 0; min-width: 0; }
+.user-page-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.user-page-actions { flex-shrink: 0; flex-wrap: nowrap; }
+.user-page-actions .btn-ghost, .user-page-actions .btn-primary, .user-page-actions .pill-muted { white-space: nowrap; }
+@media (max-width: 560px) {
+  .page-header:has(.user-page-title) { flex-wrap: nowrap; gap: 0.5rem; }
+  .user-page-actions { gap: 0.3rem; }
+  .user-page-actions .btn-label { display: none; }
+  .user-page-actions .btn-ghost, .user-page-actions .btn-primary {
+    padding: 0; width: 2.2rem; height: 2.2rem; justify-content: center;
+  }
+  .user-page-actions .pill-muted {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 2.2rem; height: 2.2rem; padding: 0;
+  }
+}

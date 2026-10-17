@@ -2746,16 +2746,16 @@
     var fStatus = friendStatusFor(state.selectedUser);
     var friendBtnHtml;
     if (fStatus === "accepted") {
-      friendBtnHtml = '<span class="pill-muted">' + icon("user-check") + ' Amico</span>';
+      friendBtnHtml = '<span class="pill-muted" title="Amico">' + icon("user-check") + '<span class="btn-label"> Amico</span></span>';
     } else if (fStatus === "outgoing") {
-      friendBtnHtml = '<span class="pill-muted">Richiesta inviata</span>';
+      friendBtnHtml = '<span class="pill-muted" title="Richiesta inviata">' + icon("clock") + '<span class="btn-label"> Richiesta inviata</span></span>';
     } else if (fStatus === "pending") {
       var reqId = ((state.friends || []).filter(function (x) { return x && sameUser(x.username, state.selectedUser) && x.status === "pending"; })[0] || {}).id;
-      friendBtnHtml = '<button type="button" data-action="accept-friend" data-id="' + escapeHtml(reqId || "") + '" class="btn-primary btn-sm">' + icon("user-check") + ' Accetta richiesta</button>';
+      friendBtnHtml = '<button type="button" data-action="accept-friend" data-id="' + escapeHtml(reqId || "") + '" class="btn-primary btn-sm" title="Accetta richiesta">' + icon("user-check") + '<span class="btn-label"> Accetta richiesta</span></button>';
     } else {
-      friendBtnHtml = '<button type="button" data-action="add-friend" data-username="' + escapeHtml(state.selectedUser) + '" class="btn-ghost btn-sm">' + icon("user-plus") + ' Aggiungi amico</button>';
+      friendBtnHtml = '<button type="button" data-action="add-friend" data-username="' + escapeHtml(state.selectedUser) + '" class="btn-ghost btn-sm" title="Aggiungi amico">' + icon("user-plus") + '<span class="btn-label"> Aggiungi amico</span></button>';
     }
-    friendBtnHtml += ' <button type="button" data-action="open-gift" data-username="' + escapeHtml(state.selectedUser) + '" class="btn-ghost btn-sm">' + icon("gift") + ' Regala carte</button>';
+    friendBtnHtml += ' <button type="button" data-action="open-gift" data-username="' + escapeHtml(state.selectedUser) + '" class="btn-ghost btn-sm" title="Regala carte">' + icon("gift") + '<span class="btn-label"> Regala carte</span></button>';
     var search = (state.otherUserSearch || "").toLowerCase();
     var availableOther = state.otherUserInventory.filter(isAvailable);
     var filteredOther = availableOther.filter(function (i) { return !search || i.name.toLowerCase().indexOf(search) !== -1; });
