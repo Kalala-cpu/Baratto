@@ -1859,3 +1859,23 @@ button.photo-upload { background: none; font-family: inherit; }
     width: 2.2rem; height: 2.2rem; padding: 0;
   }
 }
+
+/* =======================================================================
+   TRASCINAMENTO DELLE CARTE NELL'INVENTARIO
+   ======================================================================= */
+.item-card[data-drag-id] { cursor: grab; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+.item-card[data-drag-id] img, .item-card[data-drag-id] video { -webkit-user-drag: none; pointer-events: none; }
+.item-card[data-drag-id] .item-photo { cursor: grab; }
+.item-card.drag-source { opacity: 0.35; }
+.item-card.drag-over { outline: 2px dashed var(--brass); outline-offset: -2px; transform: scale(0.97); }
+.item-card.drag-ghost {
+  position: fixed;
+  z-index: 3000;
+  margin: 0;
+  pointer-events: none;
+  opacity: 0.92;
+  transform: rotate(2deg) scale(1.03);
+  box-shadow: var(--shadow-lg);
+  cursor: grabbing;
+}
+body.is-dragging-card, body.is-dragging-card * { cursor: grabbing !important; -webkit-user-select: none; user-select: none; }

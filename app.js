@@ -427,6 +427,129 @@
     });
   }
 
+  /* ============ riordino con trascinamento ============
+     Sposta l'oggetto itemId nella posizione occupata da targetId (gli altri scorrono).
+     Stessa logica di moveInventoryItem: ordine locale subito, poi lo stesso spostamento
+     (per id) rifatto lato server dentro una transazione. */
+  function moveInventoryItemTo(itemId, targetId) {
+    var inv = state.inventory;
+    var from = findItemIndexById(itemId, inv), to = findItemIndexById(targetId, inv);
+    if (from < 0 || to < 0 || from === to) return;
+    inv.splice(to, 0, inv.splice(from, 1)[0]);
+    var touchesProfile = from === 0 || to === 0;
+    var changesProfile = touchesProfile && state.avatarHidden;
+    if (changesProfile) { state.avatarHidden = false; }
+    render();
+    (changesProfile ? setAvatarHidden(false) : Promise.resolve()).then(function () {
+      return updateInventory(state.currentUser.toLowerCase(), function (serverInv) {
+        var i = findItemIndexById(itemId, serverInv), t = findItemIndexById(targetId, serverInv);
+        if (i < 0 || t < 0) return serverInv;
+        serverInv.splice(t, 0, serverInv.splice(i, 1)[0]);
+        return serverInv;
+      });
+    }).then(function () { loadInventory(); if (touchesProfile) loadCommunity(); }).catch(function (err) {
+      setMessage("Errore: " + err.message, "error");
+      loadInventory();
+    });
+  }
+
+  /* Trascinamento con i pointer events (mouse, touch, penna). Mouse: si parte dopo qualche
+     pixel di movimento. Touch: tieni premuto ~0,35 s sulla carta (cosi' lo scroll normale
+     resta libero), poi trascini. Vicino ai bordi dello schermo la pagina scorre da sola.
+     I pulsanti freccia restano come alternativa. */
+  var drag = null;
+  function dragCardAt(x, y, exceptId) {
+    var el = document.elementFromPoint(x, y);
+    var card = el && el.closest ? el.closest(".item-card[data-drag-id]") : null;
+    return card && card.getAttribute("data-drag-id") !== exceptId ? card : null;
+  }
+  function dragCleanup() {
+    if (!drag) return;
+    clearTimeout(drag.timer); clearInterval(drag.scrollTimer);
+    if (drag.ghost && drag.ghost.parentNode) drag.ghost.parentNode.removeChild(drag.ghost);
+    if (drag.card) drag.card.classList.remove("drag-source");
+    if (drag.over) drag.over.classList.remove("drag-over");
+    document.body.classList.remove("is-dragging-card");
+    drag = null;
+  }
+  function dragStart() {
+    if (!drag || drag.started) return;
+    drag.started = true;
+    var r = drag.card.getBoundingClientRect();
+    var g = drag.card.cloneNode(true);
+    g.removeAttribute("data-drag-id");
+    g.className += " drag-ghost";
+    g.style.width = r.width + "px";
+    drag.offX = drag.x - r.left; drag.offY = drag.y - r.top;
+    g.style.left = (drag.x - drag.offX) + "px"; g.style.top = (drag.y - drag.offY) + "px";
+    document.body.appendChild(g);
+    drag.ghost = g;
+    drag.card.classList.add("drag-source");
+    document.body.classList.add("is-dragging-card");
+    if (navigator.vibrate) { try { navigator.vibrate(15); } catch (err) {} }
+    /* scorrimento automatico vicino ai bordi alto/basso */
+    drag.scrollTimer = setInterval(function () {
+      if (!drag) return;
+      var h = window.innerHeight, edge = 70;
+      if (drag.y < edge) window.scrollBy(0, -Math.ceil((edge - drag.y) / 5));
+      else if (drag.y > h - edge) window.scrollBy(0, Math.ceil((drag.y - (h - edge)) / 5));
+      dragHighlight();
+    }, 30);
+  }
+  function dragHighlight() {
+    if (!drag || !drag.started) return;
+    var over = dragCardAt(drag.x, drag.y, drag.id);
+    if (over !== drag.over) {
+      if (drag.over) drag.over.classList.remove("drag-over");
+      if (over) over.classList.add("drag-over");
+      drag.over = over;
+    }
+  }
+  document.addEventListener("pointerdown", function (e) {
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    if (drag) dragCleanup();
+    var card = e.target.closest ? e.target.closest(".item-card[data-drag-id]") : null;
+    if (!card || e.target.closest("button, input, select, textarea, label, a")) return;
+    drag = { id: card.getAttribute("data-drag-id"), card: card, x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY, type: e.pointerType, started: false, pid: e.pointerId };
+    if (e.pointerType !== "mouse") drag.timer = setTimeout(dragStart, 350);
+  });
+  document.addEventListener("pointermove", function (e) {
+    if (!drag || e.pointerId !== drag.pid) return;
+    drag.x = e.clientX; drag.y = e.clientY;
+    if (!drag.started) {
+      var moved = Math.abs(drag.x - drag.sx) + Math.abs(drag.y - drag.sy);
+      if (drag.type === "mouse") { if (moved > 6) dragStart(); }
+      else if (moved > 10) dragCleanup(); /* si sta scorrendo, non trascinando */
+      return;
+    }
+    e.preventDefault();
+    drag.ghost.style.left = (drag.x - drag.offX) + "px";
+    drag.ghost.style.top = (drag.y - drag.offY) + "px";
+    dragHighlight();
+  });
+  document.addEventListener("pointerup", function (e) {
+    if (!drag || e.pointerId !== drag.pid) return;
+    var wasStarted = drag.started, id = drag.id, target = wasStarted ? dragCardAt(e.clientX, e.clientY, id) : null;
+    var targetId = target ? target.getAttribute("data-drag-id") : null;
+    dragCleanup();
+    if (wasStarted) {
+      /* evita che il rilascio conti come click (apertura foto, ecc.) */
+      var stop = function (ev) { ev.stopPropagation(); ev.preventDefault(); };
+      document.addEventListener("click", stop, { capture: true, once: true });
+      setTimeout(function () { document.removeEventListener("click", stop, true); }, 50);
+      if (targetId) moveInventoryItemTo(id, targetId);
+    }
+  });
+  document.addEventListener("pointercancel", function () { dragCleanup(); });
+  /* durante il trascinamento touch blocca lo scroll nativo e il menu contestuale della pressione lunga */
+  document.addEventListener("touchmove", function (e) { if (drag && drag.started) e.preventDefault(); }, { passive: false });
+  document.addEventListener("contextmenu", function (e) {
+    if (drag || (e.target.closest && e.target.closest(".item-card[data-drag-id]") && e.pointerType === "touch")) e.preventDefault();
+  });
+  document.addEventListener("dragstart", function (e) {
+    if (e.target.closest && e.target.closest(".item-card[data-drag-id]")) e.preventDefault(); /* niente drag nativo delle immagini */
+  });
+
   /* ============ ripristina foto profilo = torna all'avatar predefinito ============
      "Come se non l'avessi": nessuna foto di nessun oggetto viene usata come immagine
      profilo, ovunque nell'app (per me e per gli altri) compare l'icona predefinita. Non
@@ -2635,7 +2758,7 @@
   function renderInventoryItem(item, isOwn, reorder) {
     var av = isAvailable(item), photos = itemPhotos(item);
     var isProfile = isOwn && reorder && !reorder.avatarHidden && reorder.profileId === item.id;
-    var html = '<div class="item-card ' + (av ? "" : "unavailable") + '">';
+    var html = '<div class="item-card ' + (av ? "" : "unavailable") + '"' + (isOwn && reorder ? ' data-drag-id="' + escapeHtml(item.id) + '"' : '') + '>';
     if (photos.length) {
       var firstPhoto = photos[0];
       var firstUrl = photoUrl(firstPhoto);
