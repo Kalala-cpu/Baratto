@@ -484,6 +484,7 @@
       dbGet("inventories"),
       dbGet("avatarHidden").catch(function () { return {}; }) /* non critico: se fallisce si usano le foto */
     ]).then(function (results) {
+      avatarPicks = {}; /* nuova estrazione casuale delle immagini profilo */
       var usernames = results[0] || {};
       var invs = results[1] || {};
       var hiddenAvatars = results[2] || {};
@@ -2566,18 +2567,32 @@
      particolare nella pila avatar di un gruppo di cui fa parte (dove, essendo sempre il
      proprietario il primo membro, compariva quasi sempre) e accanto ai propri messaggi in
      chat. Qui la si prende direttamente da state.inventory, come fa ownAvatarHtml(). */
+  /* immagine profilo casuale: se la card usata come profilo ha piu' di una foto/video, ogni
+     utente mostra una di queste a caso. La scelta e' memorizzata (avatarPicks) finche' non
+     si ricarica la community o l'app, cosi' non cambia a ogni render e non sfarfalla; alla
+     ricarica successiva viene estratta di nuovo. Se la card cambia, si estrae da capo. */
+  var avatarPicks = {};
+  function pickAvatarPhoto(uLower, item) {
+    var photos = item ? itemPhotos(item) : [];
+    if (!photos.length) return null;
+    if (photos.length === 1) return photos[0];
+    var key = uLower + "|" + item.id;
+    var pick = avatarPicks[key];
+    if (pick === undefined || pick >= photos.length) {
+      pick = Math.floor(Math.random() * photos.length);
+      avatarPicks[key] = pick;
+    }
+    return photos[pick];
+  }
   function findCommunityUserPhoto(username) {
     var uLower = String(username || "").toLowerCase();
     if (state.currentUser && uLower === String(state.currentUser).toLowerCase()) {
       if (state.avatarHidden) return null;
-      var own = state.inventory && state.inventory[0];
-      var ownPhotos = own ? itemPhotos(own) : [];
-      return ownPhotos.length ? ownPhotos[0] : null;
+      return pickAvatarPhoto(uLower, state.inventory && state.inventory[0]);
     }
     var u = (state.communityUsers || []).filter(function (x) { return x.uLower === uLower; })[0];
     if (!u || !u.firstItem) return null;
-    var photos = itemPhotos(u.firstItem);
-    return photos.length ? photos[0] : null;
+    return pickAvatarPhoto(uLower, u.firstItem);
   }
   /* contenuto interno (img/video oppure icona di scorta) per l'avatar di un utente */
   function userAvatarInner(username) {
@@ -2609,9 +2624,8 @@
      memoria), non da communityUsers (che non include mai se stessi) */
   function ownAvatarHtml() {
     var first = !state.avatarHidden && state.inventory && state.inventory[0];
-    var photos = first ? itemPhotos(first) : [];
-    if (!photos.length) return '<span class="profile-btn-avatar">' + icon("user") + '</span>';
-    var p = photos[0];
+    var p = first ? pickAvatarPhoto(String(state.currentUser || "").toLowerCase(), first) : null;
+    if (!p) return '<span class="profile-btn-avatar">' + icon("user") + '</span>';
     var inner = isVideo(p)
       ? '<video src="' + escapeHtml(photoUrl(p)) + '" muted playsinline preload="metadata"></video>'
       : '<img src="' + escapeHtml(photoUrl(p)) + '" alt=""/>';
@@ -2706,9 +2720,8 @@
            scelto da lui riordinando la sua tab Inventario), se ne ha uno con una foto */
         var thumb = '';
         if (u.firstItem) {
-          var photos = itemPhotos(u.firstItem);
-          if (photos.length) {
-            var fp = photos[0];
+          var fp = pickAvatarPhoto(u.uLower, u.firstItem);
+          if (fp) {
             thumb = isVideo(fp)
               ? '<video src="' + escapeHtml(photoUrl(fp)) + '" class="community-user-thumb-video" muted playsinline preload="metadata"></video>'
               : '<img src="' + escapeHtml(photoUrl(fp)) + '" alt="" class="community-user-thumb-img"/>';
