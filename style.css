@@ -1867,7 +1867,21 @@ button.photo-upload { background: none; font-family: inherit; }
 .item-card[data-drag-id] img, .item-card[data-drag-id] video { -webkit-user-drag: none; pointer-events: none; }
 .item-card[data-drag-id] .item-photo { cursor: grab; }
 .item-card.drag-source { opacity: 0.35; }
-.item-card.drag-over { outline: 2px dashed var(--brass); outline-offset: -2px; transform: scale(0.97); }
+.item-card.drag-before, .item-card.drag-after { position: relative; }
+/* barra di inserimento sul bordo sinistro (prima) o destro (dopo) della card di riferimento
+   (dentro la card, che ha overflow:hidden) */
+.item-card.drag-before::after, .item-card.drag-after::after {
+  content: "";
+  position: absolute;
+  top: 0; bottom: 0;
+  width: 6px;
+  background: var(--brass);
+  box-shadow: 0 0 0 1px var(--paper);
+  z-index: 5;
+  pointer-events: none;
+}
+.item-card.drag-before::after { left: 0; }
+.item-card.drag-after::after { right: 0; }
 .item-card.drag-ghost {
   position: fixed;
   z-index: 3000;

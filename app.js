@@ -397,54 +397,34 @@
     });
   }
 
-  /* ============ riordino libero dell'inventario ============
-     Sposta un oggetto di una posizione avanti/indietro (dir: -1 o +1). L'ordine locale
-     cambia subito per reattivita', poi lo stesso spostamento (per id, non per indice)
-     viene rifatto anche lato server dentro una transazione, come per setAsProfileItem. */
-  function moveInventoryItem(itemId, dir) {
-    var inv = state.inventory;
-    var idx = findItemIndexById(itemId, inv);
-    var target = idx + dir;
-    if (idx < 0 || target < 0 || target >= inv.length) return;
-    var tmp = inv[idx]; inv[idx] = inv[target]; inv[target] = tmp;
-    /* se lo spostamento cambia l'oggetto in prima posizione, e' una scelta esplicita di
-       una nuova foto profilo: annulla un eventuale "nessuna foto profilo" */
-    var touchesProfile = idx === 0 || target === 0; /* cambia chi e' in prima posizione (= foto profilo) */
-    var changesProfile = touchesProfile && state.avatarHidden;
-    if (changesProfile) { state.avatarHidden = false; }
-    render();
-    (changesProfile ? setAvatarHidden(false) : Promise.resolve()).then(function () {
-      return updateInventory(state.currentUser.toLowerCase(), function (serverInv) {
-        var i = findItemIndexById(itemId, serverInv);
-        var t = i + dir;
-        if (i < 0 || t < 0 || t >= serverInv.length) return serverInv;
-        var tmp2 = serverInv[i]; serverInv[i] = serverInv[t]; serverInv[t] = tmp2;
-        return serverInv;
-      });
-    }).then(function () { loadInventory(); if (touchesProfile) loadCommunity(); }).catch(function (err) {
-      setMessage("Errore: " + err.message, "error");
-      loadInventory();
-    });
-  }
-
   /* ============ riordino con trascinamento ============
-     Sposta l'oggetto itemId nella posizione occupata da targetId (gli altri scorrono).
+     Sposta l'oggetto itemId subito prima (o, con after=true, subito dopo) l'oggetto refId; con
+     la prima/ultima card come riferimento si arriva a inizio/fine mazzo.
      Stessa logica di moveInventoryItem: ordine locale subito, poi lo stesso spostamento
      (per id) rifatto lato server dentro una transazione. */
-  function moveInventoryItemTo(itemId, targetId) {
+  function moveInventoryItemTo(itemId, refId, after) {
     var inv = state.inventory;
-    var from = findItemIndexById(itemId, inv), to = findItemIndexById(targetId, inv);
-    if (from < 0 || to < 0 || from === to) return;
-    inv.splice(to, 0, inv.splice(from, 1)[0]);
+    var from = findItemIndexById(itemId, inv);
+    if (from < 0 || itemId === refId) return;
+    var rest = inv.slice(); var item = rest.splice(from, 1)[0];
+    var r = findItemIndexById(refId, rest);
+    if (r < 0) return;
+    var to = r + (after ? 1 : 0);
+    if (to === from) return; /* resta dov'era */
+    rest.splice(to, 0, item);
+    state.inventory = rest;
     var touchesProfile = from === 0 || to === 0;
     var changesProfile = touchesProfile && state.avatarHidden;
     if (changesProfile) { state.avatarHidden = false; }
     render();
     (changesProfile ? setAvatarHidden(false) : Promise.resolve()).then(function () {
       return updateInventory(state.currentUser.toLowerCase(), function (serverInv) {
-        var i = findItemIndexById(itemId, serverInv), t = findItemIndexById(targetId, serverInv);
-        if (i < 0 || t < 0) return serverInv;
-        serverInv.splice(t, 0, serverInv.splice(i, 1)[0]);
+        var i = findItemIndexById(itemId, serverInv);
+        if (i < 0) return serverInv;
+        var moved = serverInv.splice(i, 1)[0];
+        var t = findItemIndexById(refId, serverInv);
+        if (t < 0) { serverInv.splice(i, 0, moved); return serverInv; }
+        serverInv.splice(t + (after ? 1 : 0), 0, moved);
         return serverInv;
       });
     }).then(function () { loadInventory(); if (touchesProfile) loadCommunity(); }).catch(function (err) {
@@ -458,17 +438,32 @@
      resta libero), poi trascini. Vicino ai bordi dello schermo la pagina scorre da sola.
      I pulsanti freccia restano come alternativa. */
   var drag = null;
-  function dragCardAt(x, y, exceptId) {
-    var el = document.elementFromPoint(x, y);
-    var card = el && el.closest ? el.closest(".item-card[data-drag-id]") : null;
-    return card && card.getAttribute("data-drag-id") !== exceptId ? card : null;
+  /* punto di inserimento sotto il puntatore: la card (diversa da quella trascinata) con il
+     centro piu' vicino, e il lato (prima/dopo) in base a dove sta il puntatore rispetto al suo
+     centro. Funziona anche tra due card, negli spazi vuoti e oltre la prima/ultima card;
+     fuori dall'elenco (con un margine) non c'e' nessun punto, e il rilascio annulla. */
+  function dragDropPoint(x, y, exceptId) {
+    var grid = drag && drag.card ? drag.card.parentNode : null;
+    if (!grid) return null;
+    var gr = grid.getBoundingClientRect(), m = 48;
+    if (x < gr.left - m || x > gr.right + m || y < gr.top - m || y > gr.bottom + m) return null;
+    var cards = grid.querySelectorAll(".item-card[data-drag-id]"), best = null, bestD = Infinity;
+    for (var i = 0; i < cards.length; i++) {
+      if (cards[i].getAttribute("data-drag-id") === exceptId) continue;
+      var r = cards[i].getBoundingClientRect();
+      var cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+      var dy = Math.abs(y - cy) * 2.5; /* privilegia la stessa riga */
+      var d = Math.abs(x - cx) + dy;
+      if (d < bestD) { bestD = d; best = { card: cards[i], after: x >= cx }; }
+    }
+    return best;
   }
   function dragCleanup() {
     if (!drag) return;
     clearTimeout(drag.timer); clearInterval(drag.scrollTimer);
     if (drag.ghost && drag.ghost.parentNode) drag.ghost.parentNode.removeChild(drag.ghost);
     if (drag.card) drag.card.classList.remove("drag-source");
-    if (drag.over) drag.over.classList.remove("drag-over");
+    if (drag.over) drag.over.classList.remove("drag-before", "drag-after");
     document.body.classList.remove("is-dragging-card");
     drag = null;
   }
@@ -498,12 +493,11 @@
   }
   function dragHighlight() {
     if (!drag || !drag.started) return;
-    var over = dragCardAt(drag.x, drag.y, drag.id);
-    if (over !== drag.over) {
-      if (drag.over) drag.over.classList.remove("drag-over");
-      if (over) over.classList.add("drag-over");
-      drag.over = over;
-    }
+    var pt = dragDropPoint(drag.x, drag.y, drag.id);
+    if (drag.over) drag.over.classList.remove("drag-before", "drag-after");
+    drag.over = pt ? pt.card : null;
+    drag.after = pt ? pt.after : false;
+    if (pt) pt.card.classList.add(pt.after ? "drag-after" : "drag-before");
   }
   document.addEventListener("pointerdown", function (e) {
     if (e.pointerType === "mouse" && e.button !== 0) return;
@@ -529,15 +523,17 @@
   });
   document.addEventListener("pointerup", function (e) {
     if (!drag || e.pointerId !== drag.pid) return;
-    var wasStarted = drag.started, id = drag.id, target = wasStarted ? dragCardAt(e.clientX, e.clientY, id) : null;
-    var targetId = target ? target.getAttribute("data-drag-id") : null;
+    var wasStarted = drag.started, id = drag.id;
+    drag.x = e.clientX; drag.y = e.clientY;
+    var pt = wasStarted ? dragDropPoint(drag.x, drag.y, id) : null;
+    var targetId = pt ? pt.card.getAttribute("data-drag-id") : null, after = pt ? pt.after : false;
     dragCleanup();
     if (wasStarted) {
       /* evita che il rilascio conti come click (apertura foto, ecc.) */
       var stop = function (ev) { ev.stopPropagation(); ev.preventDefault(); };
       document.addEventListener("click", stop, { capture: true, once: true });
       setTimeout(function () { document.removeEventListener("click", stop, true); }, 50);
-      if (targetId) moveInventoryItemTo(id, targetId);
+      if (targetId) moveInventoryItemTo(id, targetId, after);
     }
   });
   document.addEventListener("pointercancel", function () { dragCleanup(); });
@@ -2780,13 +2776,9 @@
     }
     html += '</div>';
     if (isOwn && reorder) {
-      /* frecce per riordinare liberamente l'oggetto di una posizione avanti/indietro,
-         piu' l'azione rapida per l'immagine profilo (Imposta come profilo / Ripristina) */
+      /* il riordino avviene trascinando la card; qui resta l'azione rapida per
+         l'immagine profilo (Imposta come profilo / Ripristina) */
       html += '<div class="item-reorder">' +
-        '<div class="item-move-group">' +
-        '<button type="button" data-action="move-item-left" data-id="' + escapeHtml(item.id) + '" class="btn-icon btn-move-arrow" title="Sposta indietro"' + (reorder.idx <= 0 ? " disabled" : "") + '>' + icon("chevron-left") + '</button>' +
-        '<button type="button" data-action="move-item-right" data-id="' + escapeHtml(item.id) + '" class="btn-icon btn-move-arrow" title="Sposta avanti"' + (reorder.idx >= reorder.total - 1 ? " disabled" : "") + '>' + icon("chevron-left", "icon-flip-h") + '</button>' +
-        '</div>' +
         (isProfile
           ? '<button type="button" data-action="clear-profile-photo" class="btn-move-item btn-set-profile" title="Rimuovi la foto profilo e usa l\'icona predefinita">' + icon("refresh") + ' Ripristina foto profilo</button>'
           : '<button type="button" data-action="set-profile-item" data-id="' + escapeHtml(item.id) + '" class="btn-move-item btn-set-profile" title="Imposta come immagine profilo">' + icon("star") + ' Imposta come profilo</button>') +
@@ -3550,8 +3542,6 @@
     else if (action === "move-edit-photo-right") { swapPhotos(state.editItemPhotos, parseInt(t.dataset.index, 10), 1); }
     else if (action === "delete-item") { deleteItem(t.dataset.id); }
     else if (action === "set-profile-item") { setAsProfileItem(t.dataset.id); }
-    else if (action === "move-item-left") { moveInventoryItem(t.dataset.id, -1); }
-    else if (action === "move-item-right") { moveInventoryItem(t.dataset.id, 1); }
     else if (action === "clear-profile-photo") { clearProfilePhoto(); }
     else if (action === "inventory-more") { state.inventoryRenderLimit = (state.inventoryRenderLimit || INVENTORY_PAGE) + INVENTORY_PAGE; render(); }
     else if (action === "other-inventory-more") { state.otherInventoryRenderLimit = (state.otherInventoryRenderLimit || INVENTORY_PAGE) + INVENTORY_PAGE; render(); }
