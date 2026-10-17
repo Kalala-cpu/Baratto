@@ -1826,3 +1826,17 @@ button.photo-upload { background: none; font-family: inherit; }
 }
 /* gruppo di azioni a destra nell'intestazione del profilo di un altro utente */
 .user-page-actions { margin-left: auto; flex-wrap: wrap; justify-content: flex-end; }
+
+/* intestazione chat: l'avatar+nome si restringono (con puntini) invece di finire sotto i
+   pulsanti; su schermi stretti i pulsanti diventano solo icona */
+.chat-thread-header { min-width: 0; }
+.chat-thread-title h2, .chat-thread-title .chat-sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-thread-actions { flex-shrink: 0; }
+.chat-thread-actions .btn-ghost { white-space: nowrap; }
+@media (max-width: 560px) {
+  .chat-thread-header { gap: 0.5rem; padding: 0.65rem 0.7rem; }
+  .chat-thread-profile { gap: 0.5rem; }
+  .chat-thread-actions { gap: 0.3rem; }
+  .chat-thread-actions .btn-label { display: none; }
+  .chat-thread-actions .btn-ghost { padding: 0.45rem; width: 2.2rem; height: 2.2rem; justify-content: center; }
+}

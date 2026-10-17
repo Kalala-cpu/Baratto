@@ -2936,7 +2936,7 @@
       '<div class="chat-thread-title"><h2>' + escapeHtml(target.name) + '</h2>' + (isGroup ? '<div class="chat-sub">' + toArray(target.members).length + ' membri</div>' : '<div class="chat-sub">Vedi inventario</div>') + '</div>' +
       '</div>' +
       '<div class="chat-thread-actions">' +
-      (!isGroup ? '<button type="button" data-action="open-gift" data-username="' + escapeHtml(target.id) + '" class="btn-ghost btn-sm" title="Regala delle carte">' + icon("gift") + ' Regala</button>' + '<button type="button" data-action="open-chat-trade" class="btn-ghost btn-sm" title="Proponi scambio">' + icon("swap") + ' Scambio</button>' : '<button type="button" data-action="leave-group" data-id="' + escapeHtml(target.id) + '" class="btn-ghost btn-sm" title="Esci dal gruppo">' + icon("x") + ' Esci</button>') +
+      (!isGroup ? '<button type="button" data-action="open-gift" data-username="' + escapeHtml(target.id) + '" class="btn-ghost btn-sm" title="Regala delle carte">' + icon("gift") + '<span class="btn-label"> Regala</span></button>' + '<button type="button" data-action="open-chat-trade" class="btn-ghost btn-sm" title="Proponi scambio">' + icon("swap") + '<span class="btn-label"> Scambio</span></button>' : '<button type="button" data-action="leave-group" data-id="' + escapeHtml(target.id) + '" class="btn-ghost btn-sm" title="Esci dal gruppo">' + icon("x") + '<span class="btn-label"> Esci</span></button>') +
       '</div></div>';
     html += '<div class="chat-messages" id="chat-messages">';
     if (state.chatLoadingOlder) { html += '<div class="chat-load-older">' + icon("loader", "spin-tiny") + ' Carico messaggi precedenti...</div>'; }
