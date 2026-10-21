@@ -1881,11 +1881,13 @@
     var isSender = sameUser(t.fromUser || t.from, state.currentUser);
     var isRecipient = sameUser(t.toUser || t.to, state.currentUser);
     var id = escapeHtml(t.id), h = "";
-    if (isSender) {
+    if (isTradeExpired(t)) {
+      /* proposta/scommessa/regalo scaduto: nessuna azione possibile, ne' per chi l'ha inviata ne' per chi l'ha ricevuta */
+      if (isSender || isRecipient) h = '<span class="pill-muted">Proposta scaduta</span>';
+    } else if (isSender) {
       h = '<button type="button" data-action="cancel-outgoing-trade" data-id="' + id + '" class="btn-ghost btn-sm">' + icon("x") + ' Annulla</button>';
     } else if (isRecipient) {
-      if (isTradeExpired(t)) h = '<span class="pill-muted">Proposta scaduta</span>';
-      else if (t.bet) h = '<button type="button" data-action="open-bet-accept" data-id="' + id + '" class="btn-primary btn-sm">' + icon("star") + ' Partecipa</button>' +
+      if (t.bet) h = '<button type="button" data-action="open-bet-accept" data-id="' + id + '" class="btn-primary btn-sm">' + icon("star") + ' Partecipa</button>' +
         '<button type="button" data-action="decline-trade" data-id="' + id + '" class="btn-ghost btn-sm">' + icon("x") + ' Rifiuta</button>';
       else h = '<button type="button" data-action="accept-trade" data-id="' + id + '" class="btn-primary btn-sm">' + icon("check") + (t.gift ? ' Accetta il regalo' : ' Accetta') + '</button>' +
         '<button type="button" data-action="decline-trade" data-id="' + id + '" class="btn-ghost btn-sm">' + icon("x") + ' Rifiuta</button>';
@@ -2284,6 +2286,11 @@
         loadTrades();
         return null;
       }
+      if (isTradeExpired(trade)) {
+        setMessage("Questa proposta è scaduta.", "error");
+        loadTrades();
+        return null;
+      }
       if (trade.bet && (accept || trade.betStatus === "locked" || trade.betStatus === "drawn")) {
         setMessage(accept ? "Per partecipare a una scommessa scegli le tue carte da mettere in palio." : "Una scommessa accettata non può più essere rifiutata.", "error");
         return null;
@@ -2371,6 +2378,11 @@
       }
       if (trade.bet && (trade.betStatus === "locked" || trade.betStatus === "drawn")) {
         setMessage("Una scommessa accettata non può essere annullata.", "error");
+        return null;
+      }
+      if (isTradeExpired(trade)) {
+        setMessage("Questa proposta è scaduta: non può più essere annullata.", "error");
+        loadTrades();
         return null;
       }
       /* segniamo la proposta come annullata invece di cancellarla dal database (come
