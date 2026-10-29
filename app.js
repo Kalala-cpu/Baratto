@@ -2122,7 +2122,10 @@
     if (isBet) {
       if (!state.offerIds.length) { setMessage("Scegli le carte da mettere in palio.", "error"); return null; }
     } else if (!state.wantIds.length || !state.offerIds.length) {
-      setMessage("Seleziona cosa vuoi e cosa offri.", "error"); return null;
+      /* porta alla scheda in cui manca ancora la selezione ("Voglio" se sono vuote entrambe) */
+      var goTo = !state.wantIds.length ? "want" : "offer";
+      if (state.pickerTab !== goTo) { state.pickerTab = goTo; resetPicker(); }
+      setMessage(goTo === "want" ? "Scegli almeno una carta che vuoi." : "Scegli almeno una carta da offrire.", "error"); return null;
     }
     if ((!isBet && !idsStillAvailable(state.wantIds, otherInv)) || !idsStillExist(state.offerIds, state.inventory)) {
       setMessage("Alcuni oggetti selezionati non sono più disponibili. Aggiorna la selezione.", "error");
