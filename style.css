@@ -107,6 +107,7 @@
   --brass: #b5792f;
   --brass-dark: #8f5c20;
   --brass-light: #f1e2c4;
+  --ring: rgba(181, 121, 47, 0.15);
   --terracotta: #c2603f;
   --green: #4c7a4a;
   --green-bg: #eaf3e6;
@@ -300,7 +301,7 @@ input { font-family: inherit; }
 .friend-add input:focus,
 .search-box-wrap input:focus {
   border-color: var(--brass);
-  box-shadow: 0 0 0 3px rgba(181, 121, 47, 0.15);
+  box-shadow: 0 0 0 3px var(--ring);
 }
 .field-icon-wrap { position: relative; }
 .field-icon-wrap input { padding-right: 2.4rem; }
@@ -1708,7 +1709,7 @@ input { font-family: inherit; }
 .field select:focus,
 .history-adv-filters select:focus {
   border-color: var(--brass);
-  box-shadow: 0 0 0 3px rgba(181, 121, 47, 0.15);
+  box-shadow: 0 0 0 3px var(--ring);
 }
 
 .trade-duration-field { margin-top: 1.25rem; max-width: 260px; }
@@ -1893,3 +1894,27 @@ button.photo-upload { background: none; font-family: inherit; }
   cursor: grabbing;
 }
 body.is-dragging-card, body.is-dragging-card * { cursor: grabbing !important; -webkit-user-select: none; user-select: none; }
+
+/* =======================================================================
+   TEMI STAGIONALI: cambiano solo le variabili colore (vedi applySeasonTheme in app.js)
+   ======================================================================= */
+html[data-season="halloween"] { --cream: #fbf1e8; --paper: #ffffff; --line: #ecd6c2; --ink: #2a2018; --brass: #d9680f; --brass-dark: #a14a08; --brass-light: #fde3cc; --terracotta: #6b3fa0; --amber-bg: #fde3cc; --ring: rgba(217, 104, 15, 0.18); }
+@media (prefers-color-scheme: dark) {
+  html[data-season="halloween"] { --cream: #16101d; --paper: #211828; --line: #3a2d47; --ink: #f3ecdf; --brass: #f08a2e; --brass-dark: #ffa95c; --brass-light: #3a2418; --amber-bg: #3a2418; }
+}
+html[data-season="christmas"] { --cream: #f8f4ee; --paper: #ffffff; --line: #e6d9cf; --ink: #2a2420; --brass: #b43f3f; --brass-dark: #8a2b2b; --brass-light: #f6d9d6; --terracotta: #2f6b3d; --amber-bg: #f6d9d6; --ring: rgba(180, 63, 63, 0.18); }
+@media (prefers-color-scheme: dark) {
+  html[data-season="christmas"] { --cream: #131a15; --paper: #1c251f; --line: #2f3d33; --ink: #f3ecdf; --brass: #e0605a; --brass-dark: #f08a84; --brass-light: #3a1f1f; --amber-bg: #3a1f1f; }
+}
+html[data-season="newyear"] { --cream: #f5f5fa; --paper: #ffffff; --line: #dcdcec; --ink: #1f2140; --brass: #b08a1e; --brass-dark: #7d5f0f; --brass-light: #f3e8c0; --terracotta: #3a3a8f; --amber-bg: #f3e8c0; --ring: rgba(176, 138, 30, 0.2); }
+@media (prefers-color-scheme: dark) {
+  html[data-season="newyear"] { --cream: #10132a; --paper: #1a1e3a; --line: #2e3459; --ink: #f3ecdf; --brass: #e0b84a; --brass-dark: #f0cd6e; --brass-light: #332d17; --amber-bg: #332d17; }
+}
+html[data-season="easter"] { --cream: #fbf8f1; --paper: #ffffff; --line: #e6dff0; --ink: #2a2430; --brass: #8a5fc0; --brass-dark: #6a42a0; --brass-light: #e9ddf7; --terracotta: #e0a63a; --amber-bg: #e9ddf7; --ring: rgba(138, 95, 192, 0.18); }
+@media (prefers-color-scheme: dark) {
+  html[data-season="easter"] { --cream: #19151f; --paper: #231e2c; --line: #392f48; --ink: #f3ecdf; --brass: #b48be0; --brass-dark: #c9a8f0; --brass-light: #2f2540; --amber-bg: #2f2540; }
+}
+html[data-season="ferragosto"] { --cream: #f6fbfb; --paper: #ffffff; --line: #d3e6ea; --ink: #1d2a2e; --brass: #1f8aa0; --brass-dark: #166a7c; --brass-light: #d4eef3; --terracotta: #e08a2b; --amber-bg: #d4eef3; --ring: rgba(31, 138, 160, 0.18); }
+@media (prefers-color-scheme: dark) {
+  html[data-season="ferragosto"] { --cream: #0f1a1d; --paper: #172428; --line: #27393e; --ink: #f3ecdf; --brass: #4cb8cc; --brass-dark: #79d0e0; --brass-light: #1b3238; --amber-bg: #1b3238; }
+}

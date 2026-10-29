@@ -3313,9 +3313,9 @@
         '<div class="tab-nav">' + tabsHtml + "</div></header>";
   }
 
-  /* ============ banner stagionali (Halloween / Natale) ============
-     Compare in cima all'app solo nei periodi giusti (Halloween: 15 ott - 2 nov; Natale:
-     1 dic - 6 gen) e si puo' chiudere: la scelta resta per la sessione del browser. */
+  /* ============ temi stagionali (Halloween / Natale / ...) ============
+     Nei periodi giusti (Halloween: 15 ott - 2 nov; Natale: 1 dic - 6 gen; ecc.) l'app cambia
+     colori. Il vecchio banner (renderSeasonBanner) non viene piu' mostrato. */
   var SEASON_DISMISS_KEY = "barattoSeasonDismissed";
   /* data della Pasqua (calendario gregoriano, algoritmo di Meeus/Jones/Butcher) */
   function easterDate(y) {
@@ -3339,6 +3339,20 @@
     if (m === 7 && day >= 10 && day <= 16) return { id: "ferragosto", year: y, emoji: "\uD83C\uDFD6\uFE0F", title: "Buon Ferragosto!", text: "Estate di scambi: regala una carta a un amico, o a qualcuno a caso." };
     if ((m === 9 && day >= 15) || (m === 10 && day <= 2)) return { id: "halloween", year: y, emoji: "\uD83C\uDF83", title: "Buon Halloween!", text: "Dolcetto o scherzetto? Regala una carta a un utente a caso e vedi cosa succede." };
     return null;
+  }
+  /* tinge l'app con i colori della festivita' in corso: basta un attributo sull'<html>,
+     i colori veri stanno in style.css (html[data-season="..."]). Fuori periodo l'attributo
+     viene tolto e tornano i colori normali. */
+  var SEASON_THEME_COLOR = { halloween: "#d9680f", christmas: "#b43f3f", newyear: "#b08a1e", easter: "#8a5fc0", ferragosto: "#1f8aa0" };
+  var appliedSeason = null;
+  function applySeasonTheme() {
+    var s = currentSeason(), id = s ? s.id : "";
+    if (id === appliedSeason) return;
+    appliedSeason = id;
+    var root = document.documentElement;
+    if (id) root.setAttribute("data-season", id); else root.removeAttribute("data-season");
+    var meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.setAttribute("content", SEASON_THEME_COLOR[id] || "#b5792f");
   }
   function renderSeasonBanner() {
     var s = currentSeason();
@@ -3475,7 +3489,8 @@
       headerSlot.innerHTML = newHeaderHtml;
       lastHeaderHtml = newHeaderHtml;
     }
-    bodySlot.innerHTML = renderOfflineBanner() + renderSeasonBanner() + (state.currentUser ? renderAppBody() : renderAuth());
+    applySeasonTheme();
+    bodySlot.innerHTML = renderOfflineBanner() + (state.currentUser ? renderAppBody() : renderAuth());
 
     if (keepFocusId) {
       var el = document.getElementById(keepFocusId);
