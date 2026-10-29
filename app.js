@@ -233,6 +233,7 @@
     showDeleteAccountConfirm: false,
     tradeDuration: "", tradeIsBet: false, showBetAccept: null, betCounterIds: [],
     showGift: false, giftIds: [], giftMode: "pick", giftRecipient: "", giftDuration: "24h",
+    pickerSearch: "", pickerOnlySelected: false, pickerTab: "want",
     historyUserFilter: "",
     historyDateFrom: "",
     historyDateTo: "",
@@ -731,7 +732,8 @@
         (t.fromUser || "").toLowerCase().indexOf(search) !== -1 ||
         (t.to || "").toLowerCase().indexOf(search) !== -1 ||
         (t.toUser || "").toLowerCase().indexOf(search) !== -1;
-      var matchFilter = filter === "completed" ? t.accepted : filter === "pending" ? (!t.accepted && !t.declined && !t.cancelled) : (t.declined || t.cancelled);
+      /* una proposta scaduta non e' piu' "in attesa": conta tra le rifiutate/annullate */
+      var matchFilter = filter === "completed" ? t.accepted : filter === "pending" ? (!t.accepted && !t.declined && !t.cancelled && !isTradeExpired(t)) : (t.declined || t.cancelled || isTradeExpired(t));
       var matchUser = !userFilter || sameUser(otherPartyOf(t), userFilter);
       var created = t.created || 0;
       var matchDate = (dateFrom === null || created >= dateFrom) && (dateTo === null || created <= dateTo);
@@ -1155,8 +1157,29 @@
       render();
     });
   }
+  /* ultima chat aperta (salvata solo su questo dispositivo, una per utente): aprendo la
+     scheda Chat si riparte da li' invece che dalla lista */
+  function lastChatKey() { return "barattoLastChat:" + String(state.currentUser || "").toLowerCase(); }
+  function saveLastChat(type, id) {
+    try { localStorage.setItem(lastChatKey(), JSON.stringify({ type: type, id: id })); } catch (e) {}
+  }
+  function resumeLastChat() {
+    var last = null;
+    try { last = JSON.parse(localStorage.getItem(lastChatKey()) || "null"); } catch (e) {}
+    if (!last || !last.id) return false;
+    if (last.type === "group") {
+      if (!getItemById(last.id, state.groups)) return false;
+      openGroupChat(last.id);
+      return true;
+    }
+    var stillFriend = (state.friends || []).some(function (f) { return f.status === "accepted" && sameUser(f.username, last.id); });
+    if (!stillFriend) return false;
+    openChat(last.id);
+    return true;
+  }
   function openChat(username) {
     if (!username) return;
+    saveLastChat("friend", username);
     detachChat();
     clearPendingChatMedia();
     setState({ tab: "chat", chatTarget: { type: "friend", id: username, name: username }, chatMessages: [], chatInput: "", chatOtherInventory: [], showChatTradeBuilder: false });
@@ -1168,6 +1191,7 @@
   function openGroupChat(groupId) {
     var group = getItemById(groupId, state.groups);
     if (!group) return;
+    saveLastChat("group", group.id);
     detachChat();
     clearPendingChatMedia();
     setState({ tab: "chat", chatTarget: { type: "group", id: group.id, name: group.name, members: toArray(group.members) }, chatMessages: [], chatInput: "", showChatTradeBuilder: false });
@@ -1899,6 +1923,7 @@
   function openBetAccept(tradeId) {
     var t = getItemById(tradeId, state.allTrades);
     if (!t || !t.bet) return;
+    resetPicker();
     setState({ showBetAccept: tradeId, betCounterIds: [] });
     render();
   }
@@ -1923,11 +1948,9 @@
       '<div class="modal-body">' +
       '<div class="chat-trade-row"><span class="chat-trade-label">Puntata di ' + escapeHtml(fromName) + ':</span> ' + (toArray(t.offerNames).map(escapeHtml).join(", ") || "—") + '</div>' +
       '<p class="trade-section-hint" style="margin-top:0.6rem;">Scegli le carte che metti in palio contro le sue. ' + (t.betDelayMs === 0 ? 'Il sorteggio (50/50) avverrà subito dopo la tua accettazione' : 'Dopo la tua accettazione il sorteggio (50/50) avverrà dopo ' + describeDuration(t.betDelayMs)) + ': chi vince prende tutte le carte, sue e tue. Una volta accettata non si può annullare.</p>' +
-      '<div class="trade-section"><h3>Le mie carte</h3><div class="items-list">' +
-      (state.inventory.length ? state.inventory.map(function (item) {
-        return renderTradeItemCard(item, state.betCounterIds.indexOf(item.id) !== -1, "toggle-bet-counter", true);
-      }).join("") : '<p class="chat-sub">Non hai carte da mettere in palio.</p>') +
-      '</div></div></div>' +
+      '<div class="trade-section"><h3>Le mie carte</h3>' +
+      renderCardPicker(state.inventory, state.betCounterIds, "toggle-bet-counter", true, "Non hai carte da mettere in palio.") +
+      '</div></div>' +
       '<div class="modal-footer"><div class="trade-actions"><button type="button" data-action="close-bet-accept" class="btn-ghost">Annulla</button><button type="button" data-action="confirm-bet-accept" class="btn-primary">' + icon("star") + ' Accetta la scommessa</button></div></div>' +
       '</div>';
   }
@@ -2148,6 +2171,7 @@
      Il destinatario puo' essere scelto o estratto a caso tra gli utenti della community. */
   var GIFT_DURATIONS = [["1h", "1 ora"], ["6h", "6 ore"], ["12h", "12 ore"], ["24h", "24 ore"], ["3", "3 giorni"], ["7", "7 giorni"]];
   function openGiftModal(preUser) {
+    resetPicker();
     setState({ showGift: true, giftIds: [], giftMode: preUser ? "pick" : "pick", giftRecipient: preUser || "", giftDuration: "24h" });
     render();
   }
@@ -2181,11 +2205,9 @@
       '<div class="field trade-duration-field"><label>Tempo per accettare</label><select id="gift-duration">' +
       GIFT_DURATIONS.map(function (o) { return '<option value="' + o[0] + '"' + (state.giftDuration === o[0] ? " selected" : "") + '>' + o[1] + '</option>'; }).join("") +
       '</select></div>' +
-      '<div class="trade-section" style="margin-top:1rem;"><h3>Le carte da regalare</h3><p class="trade-section-hint">Restano tue finché il destinatario non accetta; se non risponde in tempo il regalo scade e non cambia nulla.</p><div class="items-list">' +
-      (state.inventory.length ? state.inventory.map(function (item) {
-        return renderTradeItemCard(item, state.giftIds.indexOf(item.id) !== -1, "toggle-gift-card", true);
-      }).join("") : '<p class="chat-sub">Non hai carte da regalare.</p>') +
-      '</div></div></div>' +
+      '<div class="trade-section" style="margin-top:1rem;"><h3>Le carte da regalare</h3><p class="trade-section-hint">Restano tue finché il destinatario non accetta; se non risponde in tempo il regalo scade e non cambia nulla.</p>' +
+      renderCardPicker(state.inventory, state.giftIds, "toggle-gift-card", true, "Non hai carte da regalare.") +
+      '</div></div>' +
       '<div class="modal-footer"><div class="trade-actions"><button type="button" data-action="close-gift" class="btn-ghost">Annulla</button><button type="button" data-action="confirm-gift" class="btn-primary">' + icon("gift") + ' Invia il regalo</button></div></div>' +
       '</div>';
   }
@@ -2247,6 +2269,7 @@
   /* ============ proposta di scambio dalla chat ============ */
   function openChatTradeBuilder() {
     if (!state.chatTarget || state.chatTarget.type !== "friend") return;
+    resetPicker(); state.pickerTab = "want";
     setState({ showChatTradeBuilder: true, wantIds: [], offerIds: [], chatOtherInventory: [], tradeDuration: "", tradeIsBet: false, showBetAccept: null, betCounterIds: [] });
     render();
     getInventory(state.chatTarget.id.toLowerCase()).then(function (inv) {
@@ -2522,7 +2545,9 @@
     var expiredIds = pending.filter(isTradeExpired).map(function (t) { return t.id; }).sort().join(",");
     if (expiredIds !== lastExpiredTradeIds) {
       lastExpiredTradeIds = expiredIds;
-      render();
+      /* updateHistory ricalcola anche la lista filtrata della tab Scambi (la scaduta passa
+         da "In attesa" a "Rifiutati/Annullati") e poi fa il render */
+      updateHistory();
     }
   }
   setInterval(checkTradeExpiries, TRADE_EXPIRY_CHECK_MS);
@@ -2633,6 +2658,61 @@
      ("Voglio" / "Offro"), cosi' si riconoscono gli oggetti anche solo dalla foto.
      showAvailability: se true e l'oggetto e' segnato "non disponibile" mostra un'etichetta
      (usato per la propria lista "Offro", dove si puo' scegliere anche un oggetto non disponibile) */
+  /* ============ selettore carte (scambio / regalo / scommessa) ============
+     Elenco con ricerca, contatore delle carte scelte e scorrimento interno: regge anche
+     centinaia di carte senza allungare all'infinito la pagina o il modale. */
+  var PICKER_KEYS = { "toggle-want": "wantIds", "toggle-offer": "offerIds", "toggle-gift-card": "giftIds", "toggle-bet-counter": "betCounterIds" };
+  function resetPicker() { state.pickerSearch = ""; state.pickerOnlySelected = false; }
+  function renderCardPicker(items, selectedIds, action, showAvailability, emptyText) {
+    if (!items.length) return '<p class="chat-sub">' + emptyText + '</p>';
+    var q = (state.pickerSearch || "").trim().toLowerCase();
+    var shown = items.filter(function (it) {
+      if (q && String(it.name || "").toLowerCase().indexOf(q) === -1) return false;
+      if (state.pickerOnlySelected && selectedIds.indexOf(it.id) === -1) return false;
+      return true;
+    });
+    var n = selectedIds.length;
+    var key = PICKER_KEYS[action];
+    return '<div class="picker">' +
+      '<div class="search-box-wrap picker-search"><input type="text" id="picker-search" placeholder="Cerca tra ' + items.length + ' carte..." value="' + escapeHtml(state.pickerSearch) + '" autocomplete="off"/>' +
+      (state.pickerSearch ? '<button type="button" data-action="picker-clear-search" class="btn-clear">' + icon("x") + '</button>' : '') + '</div>' +
+      '<div class="picker-meta"><span class="picker-count">' + n + (n === 1 ? ' selezionata' : ' selezionate') + '</span>' +
+      '<span class="picker-meta-actions">' +
+      (n ? '<button type="button" data-action="picker-only-selected" class="picker-link' + (state.pickerOnlySelected ? ' active' : '') + '">' + (state.pickerOnlySelected ? 'Mostra tutte' : 'Solo scelte') + '</button>' +
+           '<button type="button" data-action="picker-clear-selection" data-key="' + key + '" class="picker-link">Deseleziona</button>' : '') +
+      '</span></div>' +
+      '<div class="items-list picker-list">' +
+      (shown.length ? shown.map(function (it) { return renderTradeItemCard(it, selectedIds.indexOf(it.id) !== -1, action, showAvailability); }).join("") : '<p class="chat-sub picker-empty">Nessuna carta corrisponde.</p>') +
+      '</div></div>';
+  }
+  /* modale unico di proposta (scambio o scommessa), usato sia in Community sia in Chat.
+     Con lo scambio normale le due liste ("Voglio" / "Offro") stanno in due schede, cosi'
+     ognuna ha tutto lo spazio; con la scommessa c'e' solo "Metto in palio". */
+  function renderTradeModal(title, otherItems, closeAction, submitAction) {
+    var bet = !!state.tradeIsBet;
+    var tab = bet ? "offer" : (state.pickerTab === "offer" ? "offer" : "want");
+    var tabs = bet ? '' :
+      '<div class="seg picker-tabs">' +
+      '<button type="button" data-action="picker-tab" data-tab="want" class="' + (tab === "want" ? "active" : "") + '">Voglio (' + state.wantIds.length + ')</button>' +
+      '<button type="button" data-action="picker-tab" data-tab="offer" class="' + (tab === "offer" ? "active" : "") + '">Offro (' + state.offerIds.length + ')</button></div>';
+    var body;
+    if (tab === "want") {
+      body = '<p class="trade-section-hint">Le carte dell\'altro utente che vorresti ricevere.</p>' +
+        renderCardPicker(otherItems, state.wantIds, "toggle-want", false, "Nessun oggetto disponibile.");
+    } else {
+      body = '<p class="trade-section-hint">' + (bet
+        ? 'Scegli le carte che metti in palio: se perdi il sorteggio vanno all\'altro utente. Puoi usare anche carte "non disponibili".'
+        : 'Puoi offrire anche oggetti segnati come "non disponibili": restano nascosti alla community ma puoi comunque proporli.') + '</p>' +
+        renderCardPicker(state.inventory, state.offerIds, "toggle-offer", true, "Non hai carte da offrire.");
+    }
+    return '<div class="modal-overlay" data-action="' + closeAction + '"></div>' +
+      '<div class="modal modal-picker">' +
+      '<div class="modal-header"><h2>' + escapeHtml(title) + '</h2><button type="button" data-action="' + closeAction + '" class="btn-close">' + icon("x") + '</button></div>' +
+      '<div class="modal-body">' + tabs + body + renderTradeDurationField() + '</div>' +
+      '<div class="modal-footer"><div class="trade-actions"><button type="button" data-action="' + closeAction + '" class="btn-ghost">Annulla</button><button type="button" data-action="' + submitAction + '" class="btn-primary">Invia Proposta</button></div></div>' +
+      '</div>';
+  }
+
   function renderTradeItemCard(item, selected, action, showAvailability) {
     var photos = itemPhotos(item);
     var thumbHtml;
@@ -2895,45 +2975,12 @@
       html += '<div class="search-box-wrap"><input type="text" id="other-inventory-search" placeholder="Cerca nell\'inventario di ' + escapeHtml(state.selectedUser) + '..." value="' + escapeHtml(state.otherUserSearch) + '"/>' + (state.otherUserSearch ? '<button type="button" data-action="clear-search" data-target="otherInventory" class="btn-clear">' + icon("x") + '</button>' : '') + '</div>';
       var otherLimit = state.otherInventoryRenderLimit || INVENTORY_PAGE;
       var visibleOther = filteredOther.slice(0, otherLimit);
-      html += '<div class="items-grid">' + visibleOther.map(function (item) {
-        /* in una scommessa non si chiede nulla all'altro utente: le sue carte non si selezionano */
-        var betMode = state.showTradeBuilder && state.tradeIsBet;
-        var sel = !betMode && state.wantIds.indexOf(item.id) !== -1;
-        var photos = itemPhotos(item);
-        var firstPhoto = photos[0];
-        var thumbHtml = photos.length
-          ? (isVideo(firstPhoto)
-              ? '<video src="' + escapeHtml(photoUrl(firstPhoto)) + '" class="item-thumb-video" muted playsinline preload="metadata"></video>'
-              : '<img src="' + escapeHtml(photoUrl(firstPhoto)) + '" alt=""/>')
-          : "";
-        return '<div class="item-card ' + (sel ? "selected" : "") + '"><div class="item-select' + (betMode ? " no-select" : "") + '"' + (betMode ? "" : ' data-action="toggle-want" data-id="' + escapeHtml(item.id) + '"') + '>' +
-          (photos.length ? '<div class="item-photo">' + thumbHtml + '</div>' : '<div class="item-photo-empty">' + icon("package") + '</div>') +
-          (betMode ? '' : '<div class="select-check">' + icon("check") + '</div>') +
-          '</div><div class="item-info"><h3>' + escapeHtml(item.name) + '</h3>' + renderItemDatesHtml(item) + '</div></div>';
-      }).join("") + '</div>';
+      /* toccando una carta si apre la foto (come nel proprio inventario); le carte da
+         chiedere si scelgono nel modale "Proponi scambio" */
+      html += '<div class="items-grid">' + visibleOther.map(function (item) { return renderInventoryItem(item, false); }).join("") + '</div>';
       if (filteredOther.length === 0) { html += '<div class="empty-state"><p>Nessun risultato.</p></div>'; }
       else if (filteredOther.length > otherLimit) { html += '<div class="load-more"><button type="button" data-action="other-inventory-more" class="btn-ghost">Carica altri...</button></div>'; }
       html += '<div class="trade-builder-btn"><button type="button" data-action="open-trade-builder" class="btn-primary block">' + icon("swap") + ' Proponi Scambio</button></div>';
-    }
-    if (state.showTradeBuilder) {
-      html += '<div class="trade-builder">' + (state.tradeIsBet ? '' :
-        '<div class="trade-section"><h3>Voglio</h3><div class="items-list">' +
-        filteredOther.map(function (item) {
-          var sel = state.wantIds.indexOf(item.id) !== -1;
-          return renderTradeItemCard(item, sel, "toggle-want", false);
-        }).join("") +
-        '</div></div>' +
-        '<div class="trade-divider">' + icon("swap") + '</div>') +
-        '<div class="trade-section"><h3>' + (state.tradeIsBet ? "Metto in palio" : "Offro") + '</h3><p class="trade-section-hint">' +
-        (state.tradeIsBet ? 'Scegli le carte che metti in palio: se perdi il sorteggio vanno all\'altro utente. Puoi usare anche carte "non disponibili".' : 'Puoi offrire anche oggetti segnati come "non disponibili": restano nascosti alla community ma puoi comunque proporli in questo scambio.') +
-        '</p><div class="items-list">' +
-        state.inventory.map(function (item) {
-          var sel = state.offerIds.indexOf(item.id) !== -1;
-          return renderTradeItemCard(item, sel, "toggle-offer", true);
-        }).join("") +
-        '</div></div>' +
-        renderTradeDurationField() +
-        '<div class="trade-actions"><button type="button" data-action="cancel-trade-builder" class="btn-ghost">Annulla</button><button type="button" data-action="submit-trade" class="btn-primary">Invia Proposta</button></div></div>';
     }
     return html;
   }
@@ -3175,31 +3222,7 @@
   }
 
   function renderChatTradeModal() {
-    var otherItems = state.chatOtherInventory.filter(isAvailable);
-    return '<div id="chat-trade-overlay" class="modal-overlay" data-action="close-chat-trade"></div>' +
-      '<div class="modal">' +
-      '<div class="modal-header"><h2>Proponi scambio a ' + escapeHtml(state.chatTarget.name) + '</h2><button type="button" data-action="close-chat-trade" class="btn-close">' + icon("x") + '</button></div>' +
-      '<div class="modal-body">' +
-      '<div class="trade-builder trade-builder-inline">' + (state.tradeIsBet ? '' :
-      '<div class="trade-section"><h3>Voglio</h3><div class="items-list">' +
-      (otherItems.length ? otherItems.map(function (item) {
-        var sel = state.wantIds.indexOf(item.id) !== -1;
-        return renderTradeItemCard(item, sel, "toggle-want", false);
-      }).join("") : '<p class="chat-sub">Nessun oggetto disponibile.</p>') +
-      '</div></div>' +
-      '<div class="trade-divider">' + icon("swap") + '</div>') +
-      '<div class="trade-section"><h3>' + (state.tradeIsBet ? "Metto in palio" : "Offro") + '</h3><p class="trade-section-hint">' +
-      (state.tradeIsBet ? 'Se perdi il sorteggio le carte scelte vanno all\'altro utente.' : 'Puoi offrire anche oggetti segnati come "non disponibili".') +
-      '</p><div class="items-list">' +
-      state.inventory.map(function (item) {
-        var sel = state.offerIds.indexOf(item.id) !== -1;
-        return renderTradeItemCard(item, sel, "toggle-offer", true);
-      }).join("") +
-      '</div></div></div>' +
-      renderTradeDurationField() +
-      '</div>' +
-      '<div class="modal-footer"><div class="trade-actions"><button type="button" data-action="close-chat-trade" class="btn-ghost">Annulla</button><button type="button" data-action="submit-chat-trade" class="btn-primary">Invia Proposta</button></div></div>' +
-      '</div>';
+    return renderTradeModal("Proponi scambio a " + state.chatTarget.name, state.chatOtherInventory.filter(isAvailable), "close-chat-trade", "submit-chat-trade");
   }
 
   function renderTradesTab() {
@@ -3207,7 +3230,7 @@
     var html = '<div class="page-header"><div class="page-header-title"><h2>Scambi</h2><button type="button" data-action="refresh-trades" class="btn-ghost btn-icon" title="Aggiorna">' + icon("refresh") + '</button></div><div class="trade-filters">' +
       '<button type="button" data-action="history-filter" data-filter="completed" class="' + (state.historyFilter === "completed" ? "active" : "") + '">Completati</button>' +
       '<button type="button" data-action="history-filter" data-filter="pending" class="' + (state.historyFilter === "pending" ? "active" : "") + '">In attesa</button>' +
-      '<button type="button" data-action="history-filter" data-filter="declined" class="' + (state.historyFilter === "declined" ? "active" : "") + '">Rifiutati/Annullati</button>' +
+      '<button type="button" data-action="history-filter" data-filter="declined" class="' + (state.historyFilter === "declined" ? "active" : "") + '">Rifiutati/Annullati/Scaduti</button>' +
       '</div></div>';
     html += '<div class="search-box-wrap"><input type="text" id="history-search" placeholder="Cerca..." value="' + escapeHtml(state.historySearch) + '"/>' + (state.historySearch ? '<button type="button" data-action="clear-search" data-target="history" class="btn-clear">' + icon("x") + '</button>' : '') + '</div>';
     /* filtro per utente (l'altra persona coinvolta nello scambio) e per intervallo di date */
@@ -3386,6 +3409,7 @@
       (state.showDeleteAccountConfirm ? renderDeleteAccountModal() : "") +
       (state.showBetAccept ? renderBetAcceptModal() : "") +
       (state.showGift ? renderGiftModal() : "") +
+      (state.showTradeBuilder && state.tab === "community" && state.selectedUser ? renderTradeModal("Proponi scambio a " + state.selectedUser, state.otherUserInventory.filter(isAvailable), "cancel-trade-builder", "submit-trade") : "") +
       renderLightbox();
   }
 
@@ -3403,11 +3427,12 @@
     var parts = h.split("/").map(function (p) { try { return decodeURIComponent(p); } catch (e) { return p; } });
     var knownTabs = ["inventory", "community", "friends", "chat", "trades"];
     if (parts[0] === "community" && parts[1]) { openUser(parts[1]); }
-    else if (parts[0] === "chat" && parts[1]) { switchTab("chat"); openChat(parts[1]); }
+    else if (parts[0] === "chat" && parts[1]) { switchTab("chat", true); openChat(parts[1]); }
     else if (knownTabs.indexOf(parts[0]) !== -1) { switchTab(parts[0]); }
   }
 
-  function switchTab(tab) {
+  function switchTab(tab, noResume) {
+    var cameFrom = state.tab;
     if (state.tab === "chat" && tab !== "chat") detachChat();
     clearPendingChatMedia();
     var changes = { tab: tab, selectedUser: null, otherUserInventory: [], otherUserSearch: "" };
@@ -3415,6 +3440,8 @@
     setState(changes);
     render();
     setHash(tab);
+    /* entrando nella scheda Chat da un'altra scheda si riapre l'ultima conversazione */
+    if (tab === "chat" && cameFrom !== "chat" && !noResume) resumeLastChat();
   }
   /* usata dall'icona profilo nell'header: riporta sempre al proprio inventario,
      da qualunque punto dell'app ci si trovi (inventario di un altro utente, chat, ecc.) */
@@ -3450,7 +3477,7 @@
       lastHeaderHtml = null;
       return;
     }
-    var FOCUS_PRESERVE_IDS = ["friend-username", "community-search", "inventory-search", "other-inventory-search", "history-search", "chat-input", "chat-search", "friends-search", "new-group-name"];
+    var FOCUS_PRESERVE_IDS = ["friend-username", "community-search", "inventory-search", "other-inventory-search", "history-search", "chat-input", "chat-search", "friends-search", "new-group-name", "picker-search"];
     var active = document.activeElement;
     var keepFocusId = (active && FOCUS_PRESERVE_IDS.indexOf(active.id) !== -1) ? active.id : null;
     var selStart = keepFocusId ? active.selectionStart : null, selEnd = keepFocusId ? active.selectionEnd : null;
@@ -3460,6 +3487,8 @@
        chat, o qualunque altra azione), anche quando non c'entra nulla con quell'elemento.
        Salviamo qui le posizioni prima della sostituzione e le ripristiniamo subito dopo. */
     var savedWindowScroll = window.scrollY || window.pageYOffset || document.documentElement.scrollTop || 0;
+    var pickerEl = document.querySelector(".picker-list"), modalBodyEl = document.querySelector(".modal-body");
+    var pickerScroll = pickerEl ? pickerEl.scrollTop : null, modalBodyScroll = modalBodyEl ? modalBodyEl.scrollTop : null;
     var chatEl = document.getElementById("chat-messages");
     var chatScroll = null;
     if (chatEl) {
@@ -3492,6 +3521,8 @@
     applySeasonTheme();
     bodySlot.innerHTML = renderOfflineBanner() + (state.currentUser ? renderAppBody() : renderAuth());
 
+    if (pickerScroll !== null) { var np = document.querySelector(".picker-list"); if (np) np.scrollTop = pickerScroll; }
+    if (modalBodyScroll !== null) { var nm = document.querySelector(".modal-body"); if (nm) nm.scrollTop = modalBodyScroll; }
     if (keepFocusId) {
       var el = document.getElementById(keepFocusId);
       if (el) { el.focus(); try { el.setSelectionRange(selStart, selEnd); } catch (err) {} }
@@ -3610,8 +3641,12 @@
     else if (action === "toggle-gift-card") { toggleGiftCard(t.dataset.id); }
     else if (action === "gift-mode") { state.giftMode = t.dataset.mode; render(); }
     else if (action === "confirm-gift") { submitGift(); }
-    else if (action === "open-trade-builder") { state.showTradeBuilder = true; state.tradeDuration = ""; state.tradeIsBet = false; render(); }
+    else if (action === "open-trade-builder") { state.showTradeBuilder = true; state.tradeDuration = ""; state.tradeIsBet = false; resetPicker(); state.pickerTab = "want"; render(); }
     else if (action === "cancel-trade-builder") { state.showTradeBuilder = false; state.wantIds = []; state.offerIds = []; state.tradeDuration = ""; state.tradeIsBet = false; render(); }
+    else if (action === "picker-tab") { state.pickerTab = t.dataset.tab; resetPicker(); render(); }
+    else if (action === "picker-clear-search") { state.pickerSearch = ""; render(); }
+    else if (action === "picker-only-selected") { state.pickerOnlySelected = !state.pickerOnlySelected; render(); }
+    else if (action === "picker-clear-selection") { if (t.dataset.key && state[t.dataset.key]) { state[t.dataset.key] = []; state.pickerOnlySelected = false; render(); } }
     else if (action === "toggle-want") { toggleWant(t.dataset.id); }
     else if (action === "toggle-offer") { toggleOffer(t.dataset.id); }
     else if (action === "submit-trade") { submitTrade(); }
@@ -3668,6 +3703,7 @@
     else if (e.target && e.target.id === "chat-search") { state.chatSearch = e.target.value; syncSearchBox(e.target); render(); }
     else if (e.target && e.target.id === "friends-search") { state.friendsSearch = e.target.value; syncSearchBox(e.target); render(); }
     else if (e.target && e.target.id === "new-group-name") { state.newGroupName = e.target.value; }
+    else if (e.target && e.target.id === "picker-search") { state.pickerSearch = e.target.value; render(); }
   });
 
   document.addEventListener("keydown", function (e) {

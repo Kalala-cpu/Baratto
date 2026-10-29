@@ -1918,3 +1918,17 @@ html[data-season="ferragosto"] { --cream: #f6fbfb; --paper: #ffffff; --line: #d3
 @media (prefers-color-scheme: dark) {
   html[data-season="ferragosto"] { --cream: #0f1a1d; --paper: #172428; --line: #27393e; --ink: #f3ecdf; --brass: #4cb8cc; --brass-dark: #79d0e0; --brass-light: #1b3238; --amber-bg: #1b3238; }
 }
+
+/* =======================================================================
+   SELETTORE CARTE (scambio / regalo / scommessa)
+   ======================================================================= */
+.modal-picker { width: min(94vw, 520px); }
+.picker-tabs { margin-bottom: 0.8rem; }
+.picker-search { margin-bottom: 0.5rem; }
+.picker-meta { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin-bottom: 0.45rem; font-size: 0.8rem; color: var(--ink-soft); }
+.picker-count { font-weight: 600; color: var(--ink); }
+.picker-meta-actions { display: flex; gap: 0.8rem; }
+.picker-link { border: none; background: none; padding: 0; font: inherit; font-weight: 600; color: var(--brass-dark); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+.picker-link.active { color: var(--terracotta); }
+.picker-list { max-height: min(46vh, 380px); overflow-y: auto; padding-right: 0.15rem; overscroll-behavior: contain; border-top: 1px solid var(--line); padding-top: 0.5rem; }
+.picker-empty { padding: 0.8rem 0; text-align: center; }
